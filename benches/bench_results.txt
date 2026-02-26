@@ -1,0 +1,255 @@
+enso_channel Tail Latency Benchmark
+==================================
+
+Warmup: 50000 iterations, Measure: 500000 iterations, buffer size: 16384
+All values in nanoseconds (ns)
+
+=== SPSC (Single-Producer Single-Consumer) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              |    142.0 |       41 |      125 |      250 |      458 |    90083
+enso_channel (p_batch=4 c_batch=4 full RTT)        |    221.3 |       83 |      167 |      708 |      917 |    35375
+enso_channel (p_batch=8 c_batch=8 full RTT)        |    195.7 |       41 |      167 |      375 |      584 |    31000
+enso_channel (p_batch=16 c_batch=16 full RTT)      |    280.9 |       83 |      292 |      458 |      666 |    41834
+enso_channel (p_batch=32 c_batch=32 full RTT)      |    319.3 |       83 |      333 |      625 |      875 |    33625
+enso_channel (p_batch=64 c_batch=64 full RTT)      |    378.9 |      167 |      375 |      708 |     1083 |    23541
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       |     55.3 |       20 |       41 |      177 |      229 |     8843
+enso_channel (p_batch=8 c_batch=8 amortized)       |     24.5 |        5 |       20 |       46 |       73 |     3875
+enso_channel (p_batch=16 c_batch=16 amortized)     |     17.6 |        5 |       18 |       28 |       41 |     2614
+enso_channel (p_batch=32 c_batch=32 amortized)     |     10.0 |        2 |       10 |       19 |       27 |     1050
+enso_channel (p_batch=64 c_batch=64 amortized)     |      5.9 |        2 |        5 |       11 |       16 |      367
+crossbeam                                        |    192.2 |       83 |      208 |      292 |      417 |    51375
+flume                                            |    305.5 |      166 |      291 |      666 |     4792 |    37209
+
+=== MPSC (Multi-Producer Single-Consumer, 2 producers) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              |     52.9 |        0 |       42 |      209 |      292 |    12666
+enso_channel (p_batch=4 c_batch=4 full RTT)        |     44.4 |        0 |       42 |      167 |      291 |    10292
+enso_channel (p_batch=8 c_batch=8 full RTT)        |     79.9 |        0 |       42 |      250 |      333 |    10167
+enso_channel (p_batch=16 c_batch=16 full RTT)      |    126.4 |        0 |      125 |      292 |      334 |      459
+enso_channel (p_batch=32 c_batch=32 full RTT)      |     45.3 |        0 |       42 |       84 |      167 |     9000
+enso_channel (p_batch=64 c_batch=64 full RTT)      |     65.1 |        0 |       83 |      125 |      208 |     4583
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       |     11.1 |        0 |       10 |       41 |       72 |     2573
+enso_channel (p_batch=8 c_batch=8 amortized)       |     10.0 |        0 |        5 |       31 |       41 |     1270
+enso_channel (p_batch=16 c_batch=16 amortized)     |      7.9 |        0 |        7 |       18 |       20 |       28
+enso_channel (p_batch=32 c_batch=32 amortized)     |      1.4 |        0 |        1 |        2 |        5 |      281
+enso_channel (p_batch=64 c_batch=64 amortized)     |      1.0 |        0 |        1 |        1 |        3 |       71
+crossbeam                                        |     95.1 |        0 |       83 |      250 |      292 |    13375
+flume                                            |    221.6 |        0 |       41 |     4083 |     8792 |    43208
+
+=== MPSC (Multi-Producer Single-Consumer, 4 producers) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              |    154.3 |        0 |      167 |      292 |      333 |    60292
+enso_channel (p_batch=4 c_batch=4 full RTT)        |    156.4 |        0 |      167 |      292 |      417 |    17125
+enso_channel (p_batch=8 c_batch=8 full RTT)        |    156.7 |        0 |      166 |      292 |      334 |    12417
+enso_channel (p_batch=16 c_batch=16 full RTT)      |    131.9 |        0 |      166 |      291 |      333 |    12625
+enso_channel (p_batch=32 c_batch=32 full RTT)      |    125.1 |        0 |      125 |      250 |      333 |    12042
+enso_channel (p_batch=64 c_batch=64 full RTT)      |    126.4 |        0 |      125 |      250 |      333 |    11792
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       |     39.1 |        0 |       41 |       73 |      104 |     4281
+enso_channel (p_batch=8 c_batch=8 amortized)       |     19.6 |        0 |       20 |       36 |       41 |     1552
+enso_channel (p_batch=16 c_batch=16 amortized)     |      8.2 |        0 |       10 |       18 |       20 |      789
+enso_channel (p_batch=32 c_batch=32 amortized)     |      3.9 |        0 |        3 |        7 |       10 |      376
+enso_channel (p_batch=64 c_batch=64 amortized)     |      2.0 |        0 |        1 |        3 |        5 |      184
+crossbeam                                        |    104.1 |        0 |       84 |      250 |      333 |    15958
+flume                                            |    768.0 |        0 |       42 |    11333 |    17750 |  1207834
+
+=== Fanout SPMC (1 producer, 2 consumers) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              |    458.0 |       83 |      375 |     1250 |     3958 |    41875
+enso_channel (p_batch=4 c_batch=4 full RTT)        |    215.6 |       83 |      167 |      541 |      708 |    25542
+enso_channel (p_batch=8 c_batch=8 full RTT)        |    279.7 |       83 |      167 |      542 |      875 |    19708
+enso_channel (p_batch=16 c_batch=16 full RTT)      |    222.8 |      125 |      208 |      500 |      625 |    20041
+enso_channel (p_batch=32 c_batch=32 full RTT)      |    394.5 |      125 |      417 |      708 |      917 |    14667
+enso_channel (p_batch=64 c_batch=64 full RTT)      |    225.3 |      125 |      209 |      250 |      375 |     7334
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       |     53.9 |       20 |       41 |      135 |      177 |     6385
+enso_channel (p_batch=8 c_batch=8 amortized)       |     35.0 |       10 |       20 |       67 |      109 |     2463
+enso_channel (p_batch=16 c_batch=16 amortized)     |     13.9 |        7 |       13 |       31 |       39 |     1252
+enso_channel (p_batch=32 c_batch=32 amortized)     |     12.3 |        3 |       13 |       22 |       28 |      458
+enso_channel (p_batch=64 c_batch=64 amortized)     |      3.5 |        1 |        3 |        3 |        5 |      114
+
+=== Fanout SPMC (1 producer, 4 consumers) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              |    792.5 |      292 |      750 |     1375 |     7500 |   609250
+enso_channel (p_batch=4 c_batch=4 full RTT)        |    443.6 |      250 |      417 |      584 |     4125 |    47667
+enso_channel (p_batch=8 c_batch=8 full RTT)        |    444.5 |      291 |      417 |      666 |      709 |    15250
+enso_channel (p_batch=16 c_batch=16 full RTT)      |    452.9 |      333 |      458 |      625 |     1334 |    18042
+enso_channel (p_batch=32 c_batch=32 full RTT)      |    503.0 |      333 |      500 |      750 |     4250 |    14167
+enso_channel (p_batch=64 c_batch=64 full RTT)      |    497.9 |      375 |      500 |      584 |      875 |     5292
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       |    110.9 |       62 |      104 |      146 |     1031 |    11916
+enso_channel (p_batch=8 c_batch=8 amortized)       |     55.6 |       36 |       52 |       83 |       88 |     1906
+enso_channel (p_batch=16 c_batch=16 amortized)     |     28.3 |       20 |       28 |       39 |       83 |     1127
+enso_channel (p_batch=32 c_batch=32 amortized)     |     15.7 |       10 |       15 |       23 |      132 |      442
+enso_channel (p_batch=64 c_batch=64 amortized)     |      7.8 |        5 |        7 |        9 |       13 |       82
+
+=== Work Queue MPMC (1 producers, 1 consumers) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              | 729731.8 |   262500 |   745750 |   834875 |   837959 |   838250
+enso_channel (p_batch=4 c_batch=4 full RTT)        |    396.9 |        0 |      125 |     2208 |     8667 |    12541
+enso_channel (p_batch=8 c_batch=8 full RTT)        |    359.7 |        0 |      125 |     5792 |    27083 |    34084
+enso_channel (p_batch=16 c_batch=16 full RTT)      |    315.3 |        0 |      208 |     2542 |    23083 |    29333
+enso_channel (p_batch=32 c_batch=32 full RTT)      |    411.9 |       41 |      375 |      792 |     9250 |    17709
+enso_channel (p_batch=64 c_batch=64 full RTT)      |    765.1 |      125 |      709 |     1417 |    14917 |    20250
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       |     99.2 |        0 |       31 |      552 |     2166 |     3135
+enso_channel (p_batch=8 c_batch=8 amortized)       |     45.0 |        0 |       15 |      724 |     3385 |     4260
+enso_channel (p_batch=16 c_batch=16 amortized)     |     19.7 |        0 |       13 |      158 |     1442 |     1833
+enso_channel (p_batch=32 c_batch=32 amortized)     |     12.9 |        1 |       11 |       24 |      289 |      553
+enso_channel (p_batch=64 c_batch=64 amortized)     |     12.0 |        1 |       11 |       22 |      233 |      316
+crossbeam                                        | 721124.2 |   185791 |   566375 |  2245500 |  2458834 |  2463875
+
+=== Work Queue MPMC (1 producers, 4 consumers) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              | 2586499.9 |  1628250 |  2664625 |  2769042 |  2798417 |  2801542
+enso_channel (p_batch=4 c_batch=4 full RTT)        | 625507.4 |   319000 |   641916 |   681042 |   682958 |   684250
+enso_channel (p_batch=8 c_batch=8 full RTT)        | 487623.9 |    61167 |   549166 |   580458 |   585792 |   587125
+enso_channel (p_batch=16 c_batch=16 full RTT)      | 361641.0 |       83 |   511542 |   572250 |   578708 |   580666
+enso_channel (p_batch=32 c_batch=32 full RTT)      |   8785.1 |       83 |      541 |   261834 |   320459 |   328875
+enso_channel (p_batch=64 c_batch=64 full RTT)      | 441142.2 |      250 |   460167 |   530375 |   539208 |   541833
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       | 156376.9 |    79750 |   160479 |   170260 |   170739 |   171062
+enso_channel (p_batch=8 c_batch=8 amortized)       |  60953.0 |     7645 |    68645 |    72557 |    73224 |    73390
+enso_channel (p_batch=16 c_batch=16 amortized)     |  22602.6 |        5 |    31971 |    35765 |    36169 |    36291
+enso_channel (p_batch=32 c_batch=32 amortized)     |    274.5 |        2 |       16 |     8182 |    10014 |    10277
+enso_channel (p_batch=64 c_batch=64 amortized)     |   6892.8 |        3 |     7190 |     8287 |     8425 |     8466
+crossbeam                                        | 2178363.6 |  1518125 |  2114959 |  2900250 |  2911166 |  2919750
+
+=== Work Queue MPMC (2 producers, 2 consumers) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              | 916854.6 |      125 |   852791 |  2915125 |  2944791 |  2948625
+enso_channel (p_batch=4 c_batch=4 full RTT)        | 209066.9 |        0 |      375 |   704125 |   705458 |   710584
+enso_channel (p_batch=8 c_batch=8 full RTT)        |  35295.2 |       41 |    26084 |   127375 |   128334 |   128542
+enso_channel (p_batch=16 c_batch=16 full RTT)      |  31048.0 |       83 |      375 |   319917 |   324500 |   325333
+enso_channel (p_batch=32 c_batch=32 full RTT)      | 212949.8 |    82833 |   231667 |   302208 |   307541 |   308542
+enso_channel (p_batch=64 c_batch=64 full RTT)      | 180003.8 |      208 |   143750 |   271833 |   276500 |   278834
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       |  52266.7 |        0 |       93 |   176031 |   176364 |   177646
+enso_channel (p_batch=8 c_batch=8 amortized)       |   4411.9 |        5 |     3260 |    15921 |    16041 |    16067
+enso_channel (p_batch=16 c_batch=16 amortized)     |   1940.5 |        5 |       23 |    19994 |    20281 |    20333
+enso_channel (p_batch=32 c_batch=32 amortized)     |   6654.7 |     2588 |     7239 |     9444 |     9610 |     9641
+enso_channel (p_batch=64 c_batch=64 amortized)     |   2812.6 |        3 |     2246 |     4247 |     4320 |     4356
+crossbeam                                        | 1724578.0 |   795500 |  1475208 |  2951833 |  2982792 |  3002416
+
+=== Work Queue MPMC (4 producers, 2 consumers) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              | 203403.0 |       83 |    12625 |  1684792 |  2285750 |  2354917
+enso_channel (p_batch=4 c_batch=4 full RTT)        | 455693.5 |       83 |   554375 |   845500 |   861500 |   863709
+enso_channel (p_batch=8 c_batch=8 full RTT)        | 358431.2 |   168250 |   374667 |   398417 |   399792 |   400250
+enso_channel (p_batch=16 c_batch=16 full RTT)      | 199279.1 |   117959 |   207791 |   221334 |   222500 |   223167
+enso_channel (p_batch=32 c_batch=32 full RTT)      | 379629.1 |   140375 |   355667 |   513417 |   517917 |   519583
+enso_channel (p_batch=64 c_batch=64 full RTT)      | 380653.2 |   250291 |   397250 |   427500 |   434959 |   436458
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       | 113923.4 |       20 |   138593 |   211375 |   215375 |   215927
+enso_channel (p_batch=8 c_batch=8 amortized)       |  44803.9 |    21031 |    46833 |    49802 |    49974 |    50031
+enso_channel (p_batch=16 c_batch=16 amortized)     |  12454.9 |     7372 |    12986 |    13833 |    13906 |    13947
+enso_channel (p_batch=32 c_batch=32 amortized)     |  11863.4 |     4386 |    11114 |    16044 |    16184 |    16236
+enso_channel (p_batch=64 c_batch=64 amortized)     |   5947.7 |     3910 |     6207 |     6679 |     6796 |     6819
+crossbeam                                        | 1752021.3 |   447166 |  1494209 |  3173541 |  3181792 |  3227125
+
+=== Work Queue MPMC (6 producers, 2 consumers) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              | 128642.1 |      208 |      959 |  1264250 |  1364000 |  1379583
+enso_channel (p_batch=4 c_batch=4 full RTT)        |  26202.8 |       83 |      292 |   367458 |   384125 |   388625
+enso_channel (p_batch=8 c_batch=8 full RTT)        |    809.5 |       42 |      416 |    14666 |    41083 |    41584
+enso_channel (p_batch=16 c_batch=16 full RTT)      | 456702.6 |   118750 |   448459 |   777750 |   788417 |   789917
+enso_channel (p_batch=32 c_batch=32 full RTT)      | 318724.9 |   142709 |   336916 |   371041 |   375042 |   378167
+enso_channel (p_batch=64 c_batch=64 full RTT)      | 271266.0 |   193958 |   273292 |   296083 |   299875 |   301875
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       |   6550.7 |       20 |       73 |    91864 |    96031 |    97156
+enso_channel (p_batch=8 c_batch=8 amortized)       |    101.2 |        5 |       52 |     1833 |     5135 |     5198
+enso_channel (p_batch=16 c_batch=16 amortized)     |  28543.9 |     7421 |    28028 |    48609 |    49276 |    49369
+enso_channel (p_batch=32 c_batch=32 amortized)     |   9960.2 |     4459 |    10528 |    11595 |    11720 |    11817
+enso_channel (p_batch=64 c_batch=64 amortized)     |   4238.5 |     3030 |     4270 |     4626 |     4685 |     4716
+crossbeam                                        | 1244245.3 |       41 |   891792 |  3283041 |  3290375 |  3385375
+
+=== Work Queue MPMC (4 producers, 4 consumers) ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (single)                              | 468140.3 |      333 |   101667 |  2644500 |  2664042 |  2670625
+enso_channel (p_batch=4 c_batch=4 full RTT)        | 897400.4 |   441958 |   987541 |  1064250 |  1069291 |  1070208
+enso_channel (p_batch=8 c_batch=8 full RTT)        | 611757.3 |   435250 |   625834 |   657125 |   677416 |   680458
+enso_channel (p_batch=16 c_batch=16 full RTT)      | 619165.4 |   335000 |   627292 |  1015042 |  1025208 |  1027375
+enso_channel (p_batch=32 c_batch=32 full RTT)      | 547801.6 |   346834 |   553291 |   632000 |   635584 |   638500
+enso_channel (p_batch=64 c_batch=64 full RTT)      | 530092.1 |   284125 |   535500 |   809709 |   824417 |   831041
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=4 amortized)       | 224350.1 |   110489 |   246885 |   266062 |   267322 |   267552
+enso_channel (p_batch=8 c_batch=8 amortized)       |  76469.7 |    54406 |    78229 |    82140 |    84677 |    85057
+enso_channel (p_batch=16 c_batch=16 amortized)     |  38697.8 |    20937 |    39205 |    63440 |    64075 |    64210
+enso_channel (p_batch=32 c_batch=32 amortized)     |  17118.8 |    10838 |    17290 |    19750 |    19862 |    19953
+enso_channel (p_batch=64 c_batch=64 amortized)     |   8282.7 |     4439 |     8367 |    12651 |    12881 |    12985
+crossbeam                                        | 1954264.5 |  1309459 |  1926625 |  2430000 |  2454875 |  2511208
+
+=== Work Queue MPMC (2 producers, 2 consumers) varying batch sizes ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=16 full RTT)       |    578.4 |       41 |      458 |     3000 |    22417 |    35625
+enso_channel (p_batch=4 c_batch=32 full RTT)       |    798.2 |       42 |      708 |     3250 |    24625 |    57916
+enso_channel (p_batch=8 c_batch=16 full RTT)       |    345.9 |        0 |      250 |     2959 |    10792 |    17292
+enso_channel (p_batch=8 c_batch=32 full RTT)       |    342.1 |       41 |      333 |      791 |     3458 |     5500
+enso_channel (p_batch=8 c_batch=64 full RTT)       |  46836.5 |      125 |     1375 |   231417 |   234083 |   236500
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=16 amortized)      |     36.2 |        2 |       28 |      187 |     1401 |     2226
+enso_channel (p_batch=4 c_batch=32 amortized)      |     24.9 |        1 |       22 |      101 |      769 |     1809
+enso_channel (p_batch=8 c_batch=16 amortized)      |     21.6 |        0 |       15 |      184 |      674 |     1080
+enso_channel (p_batch=8 c_batch=32 amortized)      |     10.7 |        1 |       10 |       24 |      108 |      171
+enso_channel (p_batch=8 c_batch=64 amortized)      |    731.8 |        1 |       21 |     3615 |     3657 |     3695
+
+=== Work Queue MPMC (2 producers, 4 consumers) varying batch sizes ===
+Scenario                                         |     Mean |      Min |      p50 |      p99 |    p99.9 |      Max
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=16 full RTT)       |  68429.7 |       42 |      625 |   265792 |   267542 |   268917
+enso_channel (p_batch=4 c_batch=32 full RTT)       |    840.6 |      125 |      833 |     1625 |     9917 |    13667
+enso_channel (p_batch=8 c_batch=16 full RTT)       | 587367.8 |   442250 |   601750 |   624417 |   626125 |   638708
+enso_channel (p_batch=8 c_batch=32 full RTT)       | 542875.8 |   480666 |   552792 |   579375 |   582292 |   583875
+enso_channel (p_batch=8 c_batch=64 full RTT)       | 497232.6 |     3583 |   532625 |   553416 |   557459 |   559416
+---------------------------------------------------------------------------------------------------------------------
+
+enso_channel (p_batch=4 c_batch=16 amortized)      |   4276.9 |        2 |       39 |    16612 |    16721 |    16807
+enso_channel (p_batch=4 c_batch=32 amortized)      |     26.3 |        3 |       26 |       50 |      309 |      427
+enso_channel (p_batch=8 c_batch=16 amortized)      |  36710.5 |    27640 |    37609 |    39026 |    39132 |    39919
+enso_channel (p_batch=8 c_batch=32 amortized)      |  16964.9 |    15020 |    17274 |    18105 |    18196 |    18246
+enso_channel (p_batch=8 c_batch=64 amortized)      |   7769.3 |       55 |     8322 |     8647 |     8710 |     8740
+
+ Legend:
+
+- SPSC/MPSC/Fanout 'full RTT': Total batch round-trip time
+- SPSC/MPSC/Fanout 'amortized': Per-item RTT (full RTT / batch_size)
+- Work Queue: One-way send→recv latency per message (not RTT)

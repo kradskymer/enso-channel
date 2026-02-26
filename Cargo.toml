@@ -1,0 +1,46 @@
+[package]
+name = "enso_channel"
+version = "0.1.0"
+edition = "2024"
+authors = ["ksm"]
+license = "MIT OR Apache-2.0"
+description = "High-performance lock-free ring-buffer channels inspired by LMAX Disruptor"
+repository = "https://github.com/ksm/enso_channel"
+readme = "README.md"
+keywords = ["channel", "lock-free", "ring-buffer", "spsc", "mpsc"]
+categories = ["concurrency", "data-structures"]
+rust-version = "1.88"
+
+[dependencies]
+thiserror = "2"
+crossbeam-utils = "0.8.21"
+
+[dev-dependencies]
+criterion = "0.7.0"
+paste = "1.0.15"
+crossbeam-channel = "0.5.15"
+flume = "0.12.0"
+core_affinity = "0.8"
+
+[[bench]]
+name = "spsc"
+harness = false
+
+[[bench]]
+name = "mpsc"
+harness = false
+
+[[bench]]
+name = "mpmc_queue"
+harness = false
+
+[[bench]]
+name = "fanout"
+harness = false
+
+[[bench]]
+name = "latency"
+harness = false
+
+[lints.rust]
+unsafe_code = "warn"
