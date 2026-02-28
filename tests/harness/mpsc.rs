@@ -2,18 +2,18 @@ use enso_channel::errors::{TryRecvError, TrySendError};
 
 use super::shared::Channel;
 
-pub trait ExclusiveChannel: Channel {
+pub trait MpscChannel: Channel {
     fn try_send_batch_write_exact(
         sender: &mut Self::Sender,
         items: &[u32],
     ) -> Result<(), TrySendError>;
 }
 
-pub trait CloneSender: ExclusiveChannel {
+pub trait CloneSender: MpscChannel {
     fn clone_sender(sender: &Self::Sender) -> Self::Sender;
 }
 
-pub fn send_and_recv<C: ExclusiveChannel>() {
+pub fn send_and_recv<C: MpscChannel>() {
     let (mut tx, mut rx) = C::channel(8);
 
     C::try_send(&mut tx, 10).unwrap();
@@ -23,7 +23,7 @@ pub fn send_and_recv<C: ExclusiveChannel>() {
     assert_eq!(C::try_recv(&mut rx).unwrap(), 11);
 }
 
-pub fn recv_empty_returns_insufficient_items<C: ExclusiveChannel>() {
+pub fn recv_empty_returns_insufficient_items<C: MpscChannel>() {
     let (_tx, mut rx) = C::channel(8);
 
     match C::try_recv(&mut rx) {
@@ -33,7 +33,7 @@ pub fn recv_empty_returns_insufficient_items<C: ExclusiveChannel>() {
     }
 }
 
-pub fn send_batch_write_exact<C: ExclusiveChannel>() {
+pub fn send_batch_write_exact<C: MpscChannel>() {
     let (mut tx, mut rx) = C::channel(8);
 
     C::try_send_batch_write_exact(&mut tx, &[1, 2]).unwrap();

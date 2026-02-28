@@ -1,16 +1,12 @@
 #![allow(clippy::type_complexity)]
 //! enso_channel: High-performance ring-buffer based channels.
 //!
-//! This crate organizes channels by **topology** (how many producers/consumers)
-//! and by **semantics** (fanout vs work distribution, lossless vs lossy).
+//! Public API modules:
+//! - `mpsc`: multi-producer, single-consumer
+//! - `broadcast`: lossless fixed-N broadcast (each receiver sees every item)
+//! - `mpmc`: multi-producer, multi-consumer work queue
 //!
-//! ## Semantics table
-//!
-//! | Module | Variants | Delivery semantics | Publisher back pressure | Consumer cloning |
-//! | --- | --- | --- | --- | --- | --- |
-//! | `exclusive` | `spsc`, `mpsc` | Each item is received by exactly **one** consumer (single-consumer). | **Lossless**; bounded by ring capacity and consumer progress. | `spsc` receiver not cloneable; `mpsc` sender cloneable. |
-//! | `fanout` | `spmc`, `mpmc` | **Fanout, lossless**: each consumer is expected to observe every item. | **Gated by the slowest consumer** (LMAX/Disruptor-style `min(consumed)` gating). | Consumers are fixed (no dynamic subscribe). |
-//! | `queue` | `spmc`, `mpmc` | **Work distribution**: each item is processed by exactly **one** worker; workers compete to claim items. | Bounded by ring capacity; should not depend on the slowest worker cursor. | Receivers are cloneable (worker pool). |
+//! Internal topology modules remain private implementation details.
 //!
 //! ## Lifecycle / shutdown
 //!
@@ -27,9 +23,9 @@
 #[macro_use]
 mod channel_api_macros;
 
-pub mod exclusive;
-pub mod fanout;
-pub mod queue;
+pub mod mpsc;
+pub mod broadcast;
+pub mod mpmc;
 
 mod ringbuffer;
 mod slot_states;
@@ -65,38 +61,20 @@ mod send_sync_tests {
     fn assert_sync<T: Sync>() {}
 
     #[test]
-    fn exclusive_spsc_is_send() {
-        assert_send::<crate::exclusive::spsc::Sender<u32>>();
-        assert_send::<crate::exclusive::spsc::Receiver<u32>>();
+    fn mpsc_is_send() {
+        assert_send::<crate::mpsc::Sender<u32>>();
+        assert_send::<crate::mpsc::Receiver<u32>>();
     }
 
     #[test]
-    fn exclusive_mpsc_is_send() {
-        assert_send::<crate::exclusive::mpsc::Sender<u32>>();
-        assert_send::<crate::exclusive::mpsc::Receiver<u32>>();
+    fn broadcast_is_send() {
+        assert_send::<crate::broadcast::Sender<u32, 2>>();
+        assert_send::<crate::broadcast::Receiver<u32>>();
     }
 
     #[test]
-    fn fanout_spmc_is_send() {
-        assert_send::<crate::fanout::spmc::Sender<u32, 2>>();
-        assert_send::<crate::fanout::spmc::Receiver<u32>>();
-    }
-
-    #[test]
-    fn fanout_mpmc_is_send() {
-        assert_send::<crate::fanout::mpmc::Sender<u32, 2>>();
-        assert_send::<crate::fanout::mpmc::Receiver<u32>>();
-    }
-
-    #[test]
-    fn queue_spmc_is_send() {
-        assert_send::<crate::queue::spmc::Sender<u32>>();
-        assert_send::<crate::queue::spmc::Receiver<u32>>();
-    }
-
-    #[test]
-    fn queue_mpmc_is_send() {
-        assert_send::<crate::queue::mpmc::Sender<u32>>();
-        assert_send::<crate::queue::mpmc::Receiver<u32>>();
+    fn mpmc_is_send() {
+        assert_send::<crate::mpmc::Sender<u32>>();
+        assert_send::<crate::mpmc::Receiver<u32>>();
     }
 }

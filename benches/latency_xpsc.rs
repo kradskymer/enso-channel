@@ -324,7 +324,7 @@ fn run_enso_spsc(buffer_size: usize, burst_size: usize, batch_size: usize) -> St
     let total_bursts = WARMUP_BURSTS + MEASURE_BURSTS;
     let total_messages = total_bursts * burst_size;
 
-    let (mut tx, mut rx) = enso_channel::exclusive::spsc::channel::<u64>(buffer_size);
+    let (mut tx, mut rx) = enso_channel::mpsc::channel::<u64>(buffer_size);
     let barrier = Arc::new(Barrier::new(2));
 
     let barrier_p = barrier.clone();
@@ -421,7 +421,7 @@ fn run_enso_mpsc_p1(buffer_size: usize, burst_size: usize, batch_size: usize) ->
     let total_bursts = WARMUP_BURSTS + MEASURE_BURSTS;
     let total_messages = total_bursts * burst_size;
 
-    let (tx, mut rx) = enso_channel::exclusive::mpsc::channel::<u64>(buffer_size);
+    let (tx, mut rx) = enso_channel::mpsc::channel::<u64>(buffer_size);
     let mut tx = tx;
     let barrier = Arc::new(Barrier::new(2));
 

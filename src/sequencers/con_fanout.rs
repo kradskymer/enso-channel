@@ -136,7 +136,7 @@ impl<P: PublisherSeqGate> Drop for FanoutConsumerSequencer<P> {
         // If this was the last consumer, publishers must observe a disconnected state.
         // Saturation is not expected (each consumer sequencer is dropped once).
         let prev = self.connected.fetch_sub(1, Ordering::AcqRel);
-        debug_assert!(prev > 0, "fanout connected counter underflow");
+        debug_assert!(prev > 0, "broadcast connected counter underflow");
     }
 }
 

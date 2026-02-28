@@ -1,7 +1,7 @@
 fn main() {
-    use enso_channel::exclusive::spsc;
+    use enso_channel::mpsc;
 
-    let (mut tx, mut rx) = spsc::channel::<u64>(64);
+    let (mut tx, mut rx) = mpsc::channel::<u64>(64);
 
     // Single send/recv
     tx.try_send(42).unwrap();

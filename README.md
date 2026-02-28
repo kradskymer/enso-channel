@@ -16,13 +16,13 @@ Add to your project:
 cargo add enso_channel
 ```
 
-Basic usage (SPSC):
+Basic usage (MPSC):
 
 ```rust
 fn main() {
-    use enso_channel::exclusive::spsc;
+    use enso_channel::mpsc;
 
-    let (mut tx, mut rx) = spsc::channel::<u64>(64);
+    let (mut tx, mut rx) = mpsc::channel::<u64>(64);
 
     // Single send/recv
     tx.try_send(42).unwrap();
@@ -69,10 +69,9 @@ fn main() {
 - Low latency and high throughput.
 - Batch support for sending and receiving for all patterns.
 - Multiple communication patterns:
-  - SPSC (Single Producer Single Consumer)
   - MPSC (Multi Producer Single Consumer)
-  - Fanout (Single/Multiple Producer Multiple Consumer, lossless)
-  - Work Queue (Multiple Producer Multiple Consumer Work Distribution)
+  - Broadcast (Fixed-N lossless fanout)
+  - MPMC (Multiple Producer Multiple Consumer Work Distribution)
 
 ## Core Design Principles
 
@@ -109,7 +108,7 @@ and published items may never be observed by the application.
 Example:
 
 ```rust
-use enso_channel::exclusive::mpsc;
+use enso_channel::mpsc;
 
 fn main() {
     let (mut sender, receiver) = mpsc::channel::<u64>(16);
@@ -136,7 +135,7 @@ Practical pattern for a non-blocking drain loop (producer-first shutdown):
 use enso_channel::errors::TryRecvAtMostError;
 
 fn main() {
-    let (mut sender, mut receiver) = enso_channel::exclusive::mpsc::channel::<u64>(16);
+    let (mut sender, mut receiver) = enso_channel::mpsc::channel::<u64>(16);
     sender.try_send(42).unwrap();
     // Drop sender to initiate shutdown.
     drop(sender);

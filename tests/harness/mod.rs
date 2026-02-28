@@ -2,9 +2,9 @@
 
 pub mod concurrency;
 pub mod contracts;
-pub mod exclusive;
-pub mod fanout;
-pub mod queue;
+pub mod mpsc;
+pub mod broadcast;
+pub mod mpmc;
 pub mod shared;
 
 /// Macro to generate contract tests for a channel implementation.
@@ -35,7 +35,7 @@ macro_rules! generate_contract_tests {
 ///
 /// Usage:
 /// ```ignore
-/// generate_contract_tests_prefixed!(spsc, Spsc, [
+/// generate_contract_tests_prefixed!(mpsc, MpscChannel, [
 ///     contract_fifo_order,
 ///     contract_capacity_backpressure,
 /// ]);

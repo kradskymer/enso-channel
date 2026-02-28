@@ -1,4 +1,4 @@
-use enso_channel::exclusive::mpsc;
+use enso_channel::mpsc;
 
 fn main() {
     let (mut sender, receiver) = mpsc::channel::<u64>(16);

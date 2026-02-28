@@ -158,10 +158,10 @@ where
 }
 
 // =============================================================================
-// SPSC Latency Benchmarks
+// Single-Producer MPSC Latency Benchmarks
 // =============================================================================
 
-mod spsc {
+mod mpsc_p1 {
     use super::*;
 
     fn rtt_measure<T, R, TF, RF>(
@@ -220,8 +220,8 @@ mod spsc {
     }
 
     pub fn enso_channel_single() -> LatencyStats {
-        let (tx1, rx1) = enso_channel::exclusive::spsc::channel::<u64>(BUFFER_SIZE);
-        let (tx2, rx2) = enso_channel::exclusive::spsc::channel::<u64>(BUFFER_SIZE);
+        let (tx1, rx1) = enso_channel::mpsc::channel::<u64>(BUFFER_SIZE);
+        let (tx2, rx2) = enso_channel::mpsc::channel::<u64>(BUFFER_SIZE);
         rtt_measure(
             tx1,
             tx2,
@@ -252,8 +252,8 @@ mod spsc {
     }
 
     pub fn enso_channel_batch(batch_size: usize) -> LatencyStats {
-        let (tx1, rx1) = enso_channel::exclusive::spsc::channel::<u64>(BUFFER_SIZE);
-        let (tx2, rx2) = enso_channel::exclusive::spsc::channel::<u64>(BUFFER_SIZE);
+        let (tx1, rx1) = enso_channel::mpsc::channel::<u64>(BUFFER_SIZE);
+        let (tx2, rx2) = enso_channel::mpsc::channel::<u64>(BUFFER_SIZE);
         rtt_measure(
             tx1,
             tx2,
@@ -366,7 +366,7 @@ mod spsc {
 }
 
 // =============================================================================
-// MPSC Latency Benchmarks (exclusive)
+// MPSC Latency Benchmarks
 // =============================================================================
 
 mod mpsc {
@@ -444,7 +444,7 @@ mod mpsc {
     }
 
     pub fn enso_channel_single(producer_count: usize) -> LatencyStats {
-        let (tx, rx) = enso_channel::exclusive::mpsc::channel::<u64>(BUFFER_SIZE);
+        let (tx, rx) = enso_channel::mpsc::channel::<u64>(BUFFER_SIZE);
         rtt_measure(
             producer_count,
             tx,
@@ -475,7 +475,7 @@ mod mpsc {
     }
 
     pub fn enso_channel_batch(producer_count: usize, batch_size: usize) -> LatencyStats {
-        let (tx, rx) = enso_channel::exclusive::mpsc::channel::<u64>(BUFFER_SIZE);
+        let (tx, rx) = enso_channel::mpsc::channel::<u64>(BUFFER_SIZE);
         rtt_measure(
             producer_count,
             tx,
@@ -593,17 +593,17 @@ mod mpsc {
 }
 
 // =============================================================================
-// Fanout (SPMC) Latency Benchmarks
+// Broadcast Latency Benchmarks
 // =============================================================================
 
-mod fanout {
+mod broadcast {
     use super::*;
 
     /// Measures latency from producer's perspective (time until all consumers have received)
     pub fn enso_channel_single<const N: usize>() -> LatencyStats {
         let (core0, core1) = get_core_ids();
-        let (mut tx, rxs): (enso_channel::fanout::spmc::Sender<u64, N>, _) =
-            enso_channel::fanout::spmc::channel(BUFFER_SIZE);
+        let (mut tx, rxs): (enso_channel::broadcast::Sender<u64, N>, _) =
+            enso_channel::broadcast::channel(BUFFER_SIZE);
 
         let barrier = Barrier::new(N + 1);
         let barrier = std::sync::Arc::new(barrier);
@@ -681,8 +681,8 @@ mod fanout {
 
     pub fn enso_channel_batch<const N: usize>(batch_size: usize) -> LatencyStats {
         let (core0, core1) = get_core_ids();
-        let (mut tx, rxs): (enso_channel::fanout::spmc::Sender<u64, N>, _) =
-            enso_channel::fanout::spmc::channel(BUFFER_SIZE);
+        let (mut tx, rxs): (enso_channel::broadcast::Sender<u64, N>, _) =
+            enso_channel::broadcast::channel(BUFFER_SIZE);
 
         let barrier = Barrier::new(N + 1);
         let barrier = std::sync::Arc::new(barrier);
@@ -773,10 +773,10 @@ mod fanout {
 }
 
 // =============================================================================
-// Work Queue (MPMC) Latency Benchmarks
+// MPMC Latency Benchmarks
 // =============================================================================
 
-mod queue {
+mod mpmc {
     use super::*;
 
     /// Message with embedded timestamp for one-way latency measurement.
@@ -802,17 +802,17 @@ mod queue {
         base + usize::from(p < rem)
     }
 
-    /// Work queue one-way latency: measures per-message send→recv time.
+    /// MPMC one-way latency: measures per-message send→recv time.
     /// Each message carries a timestamp; consumer computes elapsed since send.
     pub fn enso_channel_single(producer_count: usize, consumer_count: usize) -> LatencyStats {
         let (core0, core1) = get_core_ids();
-        let (tx, rx) = enso_channel::queue::mpmc::channel::<TimedMsg>(BUFFER_SIZE);
+        let (tx, rx) = enso_channel::mpmc::channel::<TimedMsg>(BUFFER_SIZE);
         let barrier = std::sync::Arc::new(Barrier::new(producer_count + consumer_count + 1));
 
         let total_messages = WARMUP_ITERS + MEASURE_ITERS;
         let recv_counter = std::sync::Arc::new(AtomicU64::new(0));
 
-        // Producers: stamp each message at successful enqueue
+        // Producers: stamp each message at successful send
         let mut producer_handles = Vec::with_capacity(producer_count);
         for p in 0..producer_count {
             let mut tx = tx.clone();
@@ -1011,7 +1011,7 @@ mod queue {
         LatencyStats::from_samples(all_samples)
     }
 
-    /// Work queue batch one-way latency: per-message send→recv time using batch APIs.
+    /// MPMC batch one-way latency: per-message send→recv time using batch APIs.
     /// Consumer takes one `Instant::now()` per batch and computes latency for each message.
     pub fn enso_channel_batch(
         producer_count: usize,
@@ -1020,7 +1020,7 @@ mod queue {
         consumer_batch_size: usize,
     ) -> LatencyStats {
         let (core0, core1) = get_core_ids();
-        let (tx, rx) = enso_channel::queue::mpmc::channel::<TimedMsg>(BUFFER_SIZE);
+        let (tx, rx) = enso_channel::mpmc::channel::<TimedMsg>(BUFFER_SIZE);
         let barrier = std::sync::Arc::new(Barrier::new(producer_count + consumer_count + 1));
 
         let total_messages = WARMUP_ITERS + MEASURE_ITERS;
@@ -1168,13 +1168,13 @@ mod queue {
         }
 
         // Diagnostic print showing blocked ns/event counts per side when enabled
-        if std::env::var("ENSO_CHANNEL_QUEUE_DIAG").is_ok() {
+        if std::env::var("ENSO_CHANNEL_MPMC_DIAG").is_ok() {
             let prod_ns = prod_block_ns_batch.load(Ordering::Relaxed);
             let prod_events = prod_block_count_batch.load(Ordering::Relaxed);
             let cons_ns = cons_block_ns_batch.load(Ordering::Relaxed);
             let cons_events = cons_block_count_batch.load(Ordering::Relaxed);
             println!(
-                "WorkQueue diag (p={}, c={}, p_batch={}, c_batch={}): producer_block_ns={}, producer_block_events={}, consumer_block_ns={}, consumer_block_events={}",
+                "MPMC diag (p={}, c={}, p_batch={}, c_batch={}): producer_block_ns={}, producer_block_events={}, consumer_block_ns={}, consumer_block_events={}",
                 producer_count,
                 consumer_count,
                 producer_batch_size,
@@ -1210,14 +1210,6 @@ fn main() {
 
     let batch_sizes = [4, 8, 16, 32, 64];
 
-    // SPSC
-    print_section("SPSC (Single-Producer Single-Consumer)");
-    print_row("enso_channel (single)", &spsc::enso_channel_single());
-    let batch_pairs: Vec<(usize, usize)> = batch_sizes.iter().map(|b| (*b, *b)).collect();
-    print_row_r_channel_batch(&batch_pairs, |_, batch| spsc::enso_channel_batch(batch));
-    print_row("crossbeam", &spsc::crossbeam());
-    print_row("flume", &spsc::flume());
-
     // MPSC
     print_section("MPSC (Multi-Producer Single-Consumer, 2 producers)");
     print_row("enso_channel (single)", &mpsc::enso_channel_single(2));
@@ -1234,65 +1226,64 @@ fn main() {
     print_row("crossbeam", &mpsc::crossbeam(4));
     print_row("flume", &mpsc::flume(4));
 
-    // Fanout SPMC
-    print_section("Fanout SPMC (1 producer, 2 consumers)");
-    print_row("enso_channel (single)", &fanout::enso_channel_single::<2>());
+    // Broadcast
+    print_section("Broadcast (1 producer, 2 consumers)");
+    print_row("enso_channel (single)", &broadcast::enso_channel_single::<2>());
     let batch_pairs: Vec<(usize, usize)> = batch_sizes.iter().map(|b| (*b, *b)).collect();
-    print_row_r_channel_batch(&batch_pairs, |_, b| fanout::enso_channel_batch::<2>(b));
+    print_row_r_channel_batch(&batch_pairs, |_, b| broadcast::enso_channel_batch::<2>(b));
 
-    print_section("Fanout SPMC (1 producer, 4 consumers)");
-    print_row("enso_channel (single)", &fanout::enso_channel_single::<4>());
+    print_section("Broadcast (1 producer, 4 consumers)");
+    print_row("enso_channel (single)", &broadcast::enso_channel_single::<4>());
     let batch_pairs: Vec<(usize, usize)> = batch_sizes.iter().map(|b| (*b, *b)).collect();
-    print_row_r_channel_batch(&batch_pairs, |_, b| fanout::enso_channel_batch::<4>(b));
+    print_row_r_channel_batch(&batch_pairs, |_, b| broadcast::enso_channel_batch::<4>(b));
 
-    // Work Queue
-    print_section("Work Queue MPMC (1 producers, 1 consumers)");
-    print_row("enso_channel (single)", &queue::enso_channel_single(1, 1));
+    print_section("MPMC (1 producers, 1 consumers)");
+    print_row("enso_channel (single)", &mpmc::enso_channel_single(1, 1));
     let batch_pairs: Vec<(usize, usize)> = batch_sizes.iter().map(|b| (*b, *b)).collect();
-    print_row_r_channel_batch(&batch_pairs, |p, c| queue::enso_channel_batch(1, 1, p, c));
-    print_row("crossbeam", &queue::crossbeam(1, 1));
+    print_row_r_channel_batch(&batch_pairs, |p, c| mpmc::enso_channel_batch(1, 1, p, c));
+    print_row("crossbeam", &mpmc::crossbeam(1, 1));
 
-    print_section("Work Queue MPMC (1 producers, 4 consumers)");
-    print_row("enso_channel (single)", &queue::enso_channel_single(1, 4));
+    print_section("MPMC (1 producers, 4 consumers)");
+    print_row("enso_channel (single)", &mpmc::enso_channel_single(1, 4));
     let batch_pairs: Vec<(usize, usize)> = batch_sizes.iter().map(|b| (*b, *b)).collect();
-    print_row_r_channel_batch(&batch_pairs, |p, c| queue::enso_channel_batch(1, 4, p, c));
-    print_row("crossbeam", &queue::crossbeam(1, 4));
+    print_row_r_channel_batch(&batch_pairs, |p, c| mpmc::enso_channel_batch(1, 4, p, c));
+    print_row("crossbeam", &mpmc::crossbeam(1, 4));
 
-    print_section("Work Queue MPMC (2 producers, 2 consumers)");
-    print_row("enso_channel (single)", &queue::enso_channel_single(2, 2));
+    print_section("MPMC (2 producers, 2 consumers)");
+    print_row("enso_channel (single)", &mpmc::enso_channel_single(2, 2));
     let batch_pairs: Vec<(usize, usize)> = batch_sizes.iter().map(|b| (*b, *b)).collect();
-    print_row_r_channel_batch(&batch_pairs, |p, c| queue::enso_channel_batch(2, 2, p, c));
-    print_row("crossbeam", &queue::crossbeam(2, 2));
+    print_row_r_channel_batch(&batch_pairs, |p, c| mpmc::enso_channel_batch(2, 2, p, c));
+    print_row("crossbeam", &mpmc::crossbeam(2, 2));
 
-    print_section("Work Queue MPMC (4 producers, 2 consumers)");
-    print_row("enso_channel (single)", &queue::enso_channel_single(4, 2));
+    print_section("MPMC (4 producers, 2 consumers)");
+    print_row("enso_channel (single)", &mpmc::enso_channel_single(4, 2));
     let batch_pairs: Vec<(usize, usize)> = batch_sizes.iter().map(|b| (*b, *b)).collect();
-    print_row_r_channel_batch(&batch_pairs, |p, c| queue::enso_channel_batch(4, 2, p, c));
-    print_row("crossbeam", &queue::crossbeam(4, 2));
+    print_row_r_channel_batch(&batch_pairs, |p, c| mpmc::enso_channel_batch(4, 2, p, c));
+    print_row("crossbeam", &mpmc::crossbeam(4, 2));
 
-    print_section("Work Queue MPMC (6 producers, 2 consumers)");
-    print_row("enso_channel (single)", &queue::enso_channel_single(6, 2));
+    print_section("MPMC (6 producers, 2 consumers)");
+    print_row("enso_channel (single)", &mpmc::enso_channel_single(6, 2));
     let batch_pairs: Vec<(usize, usize)> = batch_sizes.iter().map(|b| (*b, *b)).collect();
-    print_row_r_channel_batch(&batch_pairs, |p, c| queue::enso_channel_batch(6, 2, p, c));
-    print_row("crossbeam", &queue::crossbeam(6, 2));
+    print_row_r_channel_batch(&batch_pairs, |p, c| mpmc::enso_channel_batch(6, 2, p, c));
+    print_row("crossbeam", &mpmc::crossbeam(6, 2));
 
-    print_section("Work Queue MPMC (4 producers, 4 consumers)");
-    print_row("enso_channel (single)", &queue::enso_channel_single(4, 4));
+    print_section("MPMC (4 producers, 4 consumers)");
+    print_row("enso_channel (single)", &mpmc::enso_channel_single(4, 4));
     let batch_pairs: Vec<(usize, usize)> = batch_sizes.iter().map(|b| (*b, *b)).collect();
-    print_row_r_channel_batch(&batch_pairs, |p, c| queue::enso_channel_batch(4, 4, p, c));
-    print_row("crossbeam", &queue::crossbeam(4, 4));
+    print_row_r_channel_batch(&batch_pairs, |p, c| mpmc::enso_channel_batch(4, 4, p, c));
+    print_row("crossbeam", &mpmc::crossbeam(4, 4));
 
-    print_section("Work Queue MPMC (2 producers, 2 consumers) varying batch sizes");
+    print_section("MPMC (2 producers, 2 consumers) varying batch sizes");
     let batch_pairs: Vec<(usize, usize)> = vec![(4, 16), (4, 32), (8, 16), (8, 32), (8, 64)];
-    print_row_r_channel_batch(&batch_pairs, |p, c| queue::enso_channel_batch(2, 2, p, c));
+    print_row_r_channel_batch(&batch_pairs, |p, c| mpmc::enso_channel_batch(2, 2, p, c));
 
-    print_section("Work Queue MPMC (2 producers, 4 consumers) varying batch sizes");
+    print_section("MPMC (2 producers, 4 consumers) varying batch sizes");
     // let batch_pairs: Vec<(usize, usize)> = vec![(8, 16), (8, 32), (8, 64), (16, 16), (32, 16)];
     let batch_pairs: Vec<(usize, usize)> = vec![(4, 16), (4, 32), (8, 16), (8, 32), (8, 64)];
-    print_row_r_channel_batch(&batch_pairs, |p, c| queue::enso_channel_batch(2, 4, p, c));
+    print_row_r_channel_batch(&batch_pairs, |p, c| mpmc::enso_channel_batch(2, 4, p, c));
 
     println!("\n Legend:");
-    println!("  - SPSC/MPSC/Fanout 'full RTT': Total batch round-trip time");
-    println!("  - SPSC/MPSC/Fanout 'amortized': Per-item RTT (full RTT / batch_size)");
-    println!("  - Work Queue: One-way send→recv latency per message (not RTT)");
+    println!("  - MPSC/Broadcast 'full RTT': Total batch round-trip time");
+    println!("  - MPSC/Broadcast 'amortized': Per-item RTT (full RTT / batch_size)");
+    println!("  - MPMC: One-way send→recv latency per message (not RTT)");
 }

@@ -28,7 +28,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 
 const CHANNEL_CAPACITY: usize = 64;
 
-const SPSC_ITEMS: u32 = 1000;
+const SINGLE_PRODUCER_ITEMS: u32 = 1000;
 const MPSC_ITEMS_PER_PUBLISHER: u32 = 500;
 const WORK_STEALING_ITEMS: u32 = 1000;
 const MPMC_WORK_STEALING_ITEMS_PER_PUBLISHER: u32 = 300;
@@ -62,14 +62,14 @@ pub trait CloneReceiver: Channel {
 }
 
 // ============================================================================
-// Single Publisher, Single Consumer Concurrency
+// Single Producer, Single Consumer Concurrency
 // ============================================================================
 
-/// Contract: Concurrent SPSC maintains FIFO order and data integrity.
+/// Contract: Single producer/consumer concurrency maintains FIFO and data integrity.
 ///
 /// One publisher thread sends N items, one consumer thread receives them.
 /// Verifies all items are received in order with correct values.
-pub fn contract_concurrent_spsc<C>()
+pub fn contract_concurrent_single_producer<C>()
 where
     C: Channel + 'static,
     C::Sender: Send,
@@ -80,7 +80,7 @@ where
     thread::scope(|s| {
         // Publisher thread
         let publisher = s.spawn(move || {
-            for i in 0..SPSC_ITEMS {
+            for i in 0..SINGLE_PRODUCER_ITEMS {
                 let start = Instant::now();
                 loop {
                     match C::try_send(&mut tx, i) {
@@ -101,7 +101,7 @@ where
 
         // Consumer thread
         let consumer = s.spawn(move || {
-            let mut received = Vec::with_capacity(SPSC_ITEMS as usize);
+            let mut received = Vec::with_capacity(SINGLE_PRODUCER_ITEMS as usize);
             let mut last_progress = Instant::now();
             loop {
                 match C::try_recv(&mut rx) {
@@ -125,7 +125,11 @@ where
         let received = consumer.join().expect("consumer panicked");
 
         // Verify all items received in order
-        assert_eq!(received.len(), SPSC_ITEMS as usize, "item count mismatch");
+        assert_eq!(
+            received.len(),
+            SINGLE_PRODUCER_ITEMS as usize,
+            "item count mismatch"
+        );
         for (i, &v) in received.iter().enumerate() {
             assert_eq!(v, i as u32, "FIFO order violated at index {i}");
         }
@@ -240,7 +244,7 @@ where
 }
 
 // ============================================================================
-// Work-Stealing (Queue) Multi-Consumer Concurrency
+// Work-Stealing (MPMC) Multi-Consumer Concurrency
 // ============================================================================
 
 /// Contract: Work-stealing delivers each item to exactly one consumer.

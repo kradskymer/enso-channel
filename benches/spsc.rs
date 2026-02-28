@@ -38,21 +38,21 @@ trait BenchChannel: Sized {
 }
 
 // -----------------------------------------------------------------------------
-// enso_channel::exclusive::spsc
+// enso_channel::mpsc
 // -----------------------------------------------------------------------------
 
 struct RChannelsSpsc;
 
 impl BenchChannel for RChannelsSpsc {
-    type Sender = enso_channel::exclusive::spsc::Sender<u64>;
-    type Receiver = enso_channel::exclusive::spsc::Receiver<u64>;
+    type Sender = enso_channel::mpsc::Sender<u64>;
+    type Receiver = enso_channel::mpsc::Receiver<u64>;
 
     fn name() -> &'static str {
         "enso_channel"
     }
 
     fn bounded(capacity: usize) -> (Self::Sender, Self::Receiver) {
-        enso_channel::exclusive::spsc::channel(capacity)
+        enso_channel::mpsc::channel(capacity)
     }
 
     fn send(tx: &mut Self::Sender, value: u64) {
@@ -237,7 +237,7 @@ fn run_burst<C: BenchChannel>(capacity: usize, burst_size: usize) {
 
 /// Batch burst: producer sends all in batches, then consumer receives all in batches.
 fn run_batch_burst(capacity: usize, batch_size: usize) {
-    let (mut tx, mut rx) = enso_channel::exclusive::spsc::channel::<u64>(capacity);
+    let (mut tx, mut rx) = enso_channel::mpsc::channel::<u64>(capacity);
 
     // Send in batches
     let mut sent = 0usize;

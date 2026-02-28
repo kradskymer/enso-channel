@@ -27,7 +27,7 @@ struct QueuedSharedState {
     consumed_states: Arc<U32SlotStates>,
 }
 
-/// Wiring helper for queue consumer topology.
+/// Wiring helper for work-queue consumer topology.
 ///
 /// This keeps the internal shared-state details private to this module while
 /// allowing topologies to:

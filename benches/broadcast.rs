@@ -1,9 +1,9 @@
-//! Fanout channel benchmarks for enso_channel.
+//! Broadcast channel benchmarks for enso_channel.
 //!
-//! Tests the LMAX/Disruptor-style fixed-fanout pattern where each item is delivered
+//! Tests the fixed broadcast pattern where each item is delivered
 //! to ALL consumers, with producer gating by the slowest consumer.
 //!
-//! No direct competitor exists for lossless fixed-fanout, so we measure absolute throughput.
+//! No direct competitor exists for lossless fixed broadcast, so we measure absolute throughput.
 
 use std::sync::Barrier;
 use std::time::Duration;
@@ -15,11 +15,11 @@ mod bench_config;
 // Consumer and configuration constants
 
 const BATCH_SIZES: [usize; 2] = [16, 64];
-const SPMC_CONSUMER_COUNTS: [usize; 2] = [2, 4];
-const MPMC_CONFIGS: [(usize, usize); 3] = [(2, 2), (2, 4), (4, 2)];
+const BROADCAST_P1_CONSUMER_COUNTS: [usize; 2] = [2, 4];
+const BROADCAST_PN_CONFIGS: [(usize, usize); 3] = [(2, 2), (2, 4), (4, 2)];
 
-// Helper to register SPMC single + batch variants for a const consumer count
-fn register_spmc_variants<const N: usize>(
+// Helper to register single-producer single + batch variants for a const consumer count
+fn register_broadcast_p1_variants<const N: usize>(
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
     capacity: usize,
     message_count: usize,
@@ -33,7 +33,7 @@ fn register_spmc_variants<const N: usize>(
         BenchmarkId::new("single", &scenario_base),
         &capacity,
         |b, &cap| {
-            b.iter(|| run_fanout_spmc::<N>(cap, message_count));
+            b.iter(|| run_broadcast_p1::<N>(cap, message_count));
         },
     );
 
@@ -44,14 +44,14 @@ fn register_spmc_variants<const N: usize>(
             BenchmarkId::new("batch", &scenario_batch),
             &(capacity, bs),
             |b, &(cap, bs)| {
-                b.iter(|| run_fanout_spmc_batch::<N>(cap, message_count, bs));
+                b.iter(|| run_broadcast_p1_batch::<N>(cap, message_count, bs));
             },
         );
     }
 }
 
-// Helper to register MPMC single + batch variants for a const consumer count
-fn register_mpmc_variants<const N: usize>(
+// Helper to register multi-producer single + batch variants for a const consumer count
+fn register_broadcast_pn_variants<const N: usize>(
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
     capacity: usize,
     producers: usize,
@@ -68,7 +68,7 @@ fn register_mpmc_variants<const N: usize>(
         BenchmarkId::new("single", &scenario_base),
         &(capacity, producers, messages_per_producer),
         |b, &(cap, prod, mpp)| {
-            b.iter(|| run_fanout_mpmc::<N>(cap, prod, mpp));
+            b.iter(|| run_broadcast_pn::<N>(cap, prod, mpp));
         },
     );
 
@@ -79,21 +79,21 @@ fn register_mpmc_variants<const N: usize>(
             BenchmarkId::new("batch", &scenario_batch),
             &(capacity, producers, messages_per_producer, bs),
             |b, &(cap, prod, mpp, bs)| {
-                b.iter(|| run_fanout_mpmc_batch::<N>(cap, prod, mpp, bs));
+                b.iter(|| run_broadcast_pn_batch::<N>(cap, prod, mpp, bs));
             },
         );
     }
 }
 
 // =============================================================================
-// Fanout channel wrapper (const generic N)
+// Broadcast channel wrapper (const generic N)
 // =============================================================================
 
-trait FanoutSender<const N: usize>: Send {
+trait BroadcastSender<const N: usize>: Send {
     fn send(&mut self, value: u64);
 }
 
-trait FanoutReceiver: Send {
+trait BroadcastReceiver: Send {
     fn recv(&mut self) -> u64;
 }
 
@@ -101,7 +101,7 @@ trait FanoutReceiver: Send {
 // enso_channel::broadcast
 // -----------------------------------------------------------------------------
 
-impl<const N: usize> FanoutSender<N> for enso_channel::broadcast::Sender<u64, N> {
+impl<const N: usize> BroadcastSender<N> for enso_channel::broadcast::Sender<u64, N> {
     fn send(&mut self, value: u64) {
         let backoff = crossbeam_utils::Backoff::new();
         loop {
@@ -118,7 +118,7 @@ impl<const N: usize> FanoutSender<N> for enso_channel::broadcast::Sender<u64, N>
     }
 }
 
-impl FanoutReceiver for enso_channel::broadcast::Receiver<u64> {
+impl BroadcastReceiver for enso_channel::broadcast::Receiver<u64> {
     fn recv(&mut self) -> u64 {
         let backoff = crossbeam_utils::Backoff::new();
         loop {
@@ -139,8 +139,8 @@ impl FanoutReceiver for enso_channel::broadcast::Receiver<u64> {
 // Benchmark scenarios
 // =============================================================================
 
-/// Fanout with N consumers: producer sends, all consumers receive every item.
-fn run_fanout_spmc<const N: usize>(capacity: usize, message_count: usize) {
+/// Broadcast with N consumers: producer sends, all consumers receive every item.
+fn run_broadcast_p1<const N: usize>(capacity: usize, message_count: usize) {
     let (mut tx, rxs): (enso_channel::broadcast::Sender<u64, N>, _) =
         enso_channel::broadcast::channel(capacity);
 
@@ -172,8 +172,8 @@ fn run_fanout_spmc<const N: usize>(capacity: usize, message_count: usize) {
     .expect("threads should join");
 }
 
-/// Fanout MPMC with N consumers and P producers.
-fn run_fanout_mpmc<const N: usize>(
+/// Broadcast with N consumers and P producers.
+fn run_broadcast_pn<const N: usize>(
     capacity: usize,
     producer_count: usize,
     messages_per_producer: usize,
@@ -245,8 +245,12 @@ fn run_fanout_mpmc<const N: usize>(
 // Batch benchmark scenarios - enso_channel only (unique batch API advantage)
 // =============================================================================
 
-/// Batch fanout SPMC with N consumers: producer batch-sends, all consumers batch-receive.
-fn run_fanout_spmc_batch<const N: usize>(capacity: usize, message_count: usize, batch_size: usize) {
+/// Batch broadcast with N consumers: producer batch-sends, all consumers batch-receive.
+fn run_broadcast_p1_batch<const N: usize>(
+    capacity: usize,
+    message_count: usize,
+    batch_size: usize,
+) {
     let (mut tx, rxs): (enso_channel::broadcast::Sender<u64, N>, _) =
         enso_channel::broadcast::channel(capacity);
 
@@ -317,8 +321,8 @@ fn run_fanout_spmc_batch<const N: usize>(capacity: usize, message_count: usize, 
     .expect("threads should join");
 }
 
-/// Batch fanout MPMC with N consumers and P producers.
-fn run_fanout_mpmc_batch<const N: usize>(
+/// Batch broadcast with N consumers and P producers.
+fn run_broadcast_pn_batch<const N: usize>(
     capacity: usize,
     producer_count: usize,
     messages_per_producer: usize,
@@ -405,19 +409,23 @@ fn run_fanout_mpmc_batch<const N: usize>(
 // Criterion benchmark functions
 // =============================================================================
 
-fn bench_fanout_spmc(c: &mut Criterion) {
+fn bench_broadcast_p1(c: &mut Criterion) {
     let capacities = bench_config::get_capacities();
     let message_count = bench_config::get_message_count(500_000, 500_000);
 
-    let mut group = c.benchmark_group("fanout/spmc");
+    let mut group = c.benchmark_group("broadcast/p1");
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(3));
 
     for &capacity in &capacities {
-        for &n_consumers in SPMC_CONSUMER_COUNTS.iter() {
+        for &n_consumers in BROADCAST_P1_CONSUMER_COUNTS.iter() {
             match n_consumers {
-                2 => register_spmc_variants::<2>(&mut group, capacity, message_count, &BATCH_SIZES),
-                4 => register_spmc_variants::<4>(&mut group, capacity, message_count, &BATCH_SIZES),
+                2 => {
+                    register_broadcast_p1_variants::<2>(&mut group, capacity, message_count, &BATCH_SIZES)
+                }
+                4 => {
+                    register_broadcast_p1_variants::<4>(&mut group, capacity, message_count, &BATCH_SIZES)
+                }
                 _ => unreachable!("unexpected consumer count"),
             }
         }
@@ -426,26 +434,26 @@ fn bench_fanout_spmc(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_fanout_mpmc(c: &mut Criterion) {
+fn bench_broadcast_pn(c: &mut Criterion) {
     let capacities = bench_config::get_capacities();
     let message_count = bench_config::get_message_count(500_000, 500_000);
 
-    let mut group = c.benchmark_group("fanout/mpmc");
+    let mut group = c.benchmark_group("broadcast/pN");
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(3));
 
     for &capacity in &capacities {
-        for &(producers, n_consumers) in &MPMC_CONFIGS {
+        for &(producers, n_consumers) in &BROADCAST_PN_CONFIGS {
             let messages_per_producer = message_count / producers;
             match n_consumers {
-                2 => register_mpmc_variants::<2>(
+                2 => register_broadcast_pn_variants::<2>(
                     &mut group,
                     capacity,
                     producers,
                     messages_per_producer,
                     &BATCH_SIZES,
                 ),
-                4 => register_mpmc_variants::<4>(
+                4 => register_broadcast_pn_variants::<4>(
                     &mut group,
                     capacity,
                     producers,
@@ -460,5 +468,5 @@ fn bench_fanout_mpmc(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_fanout_spmc, bench_fanout_mpmc);
+criterion_group!(benches, bench_broadcast_p1, bench_broadcast_pn);
 criterion_main!(benches);

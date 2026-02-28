@@ -1,4 +1,4 @@
-//! Work queue (MPMC) benchmarks comparing enso_channel against crossbeam-channel and flume.
+//! MPMC benchmarks comparing enso_channel against crossbeam-channel and flume.
 //!
 //! Tests the work-distribution pattern where each item is processed by exactly one consumer.
 
@@ -20,7 +20,7 @@ const WARMUP_MS: u64 = 500;
 const MEASURE_SECS: u64 = 3;
 const BATCH_SIZES: &[usize] = &[16, 64];
 const WORK_DISTRIBUTION_CONFIGS: &[(usize, usize)] = &[
-    (1, 2), // SPMC-style
+    (1, 2), // single producer
     (1, 4),
     (2, 2), // Balanced
     (2, 4),
@@ -374,7 +374,7 @@ fn bench_mpmc_work_distribution(c: &mut Criterion) {
     // Test various producer/consumer configurations
     let configs = WORK_DISTRIBUTION_CONFIGS;
 
-    let mut group = c.benchmark_group("mpmc_queue/work_distribution");
+    let mut group = c.benchmark_group("mpmc/work_distribution");
     group.warm_up_time(Duration::from_millis(WARMUP_MS));
     group.measurement_time(Duration::from_secs(MEASURE_SECS));
 
@@ -418,7 +418,7 @@ fn bench_mpmc_work_distribution(c: &mut Criterion) {
     group.finish();
 }
 
-/// Batch MPMC work queue benchmark - enso_channel only
+/// Batch MPMC benchmark - enso_channel only
 fn bench_mpmc_batch_vs_single(c: &mut Criterion) {
     let capacities = bench_config::get_capacities();
     let message_count =
@@ -428,7 +428,7 @@ fn bench_mpmc_batch_vs_single(c: &mut Criterion) {
     // Test a subset of configs for batch comparison
     let configs = BATCH_BENCH_CONFIGS;
 
-    let mut group = c.benchmark_group("mpmc_queue/batch_vs_single");
+    let mut group = c.benchmark_group("mpmc/batch_vs_single");
     group.warm_up_time(Duration::from_millis(WARMUP_MS));
     group.measurement_time(Duration::from_secs(MEASURE_SECS));
 

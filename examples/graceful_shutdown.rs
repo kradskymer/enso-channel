@@ -1,7 +1,7 @@
 use enso_channel::errors::TryRecvAtMostError;
 
 fn main() {
-    let (mut sender, mut receiver) = enso_channel::exclusive::mpsc::channel::<u64>(16);
+    let (mut sender, mut receiver) = enso_channel::mpsc::channel::<u64>(16);
     sender.try_send(42).unwrap();
     // Drop sender to initiate shutdown.
     drop(sender);

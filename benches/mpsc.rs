@@ -28,7 +28,7 @@ const LONG_SAMPLES: usize = 100;
 // =============================================================================
 
 fn run_enso_channel_mpsc(capacity: usize, producer_count: usize, messages_per_producer: usize) {
-    let (tx, mut rx) = enso_channel::exclusive::mpsc::channel::<u64>(capacity);
+    let (tx, mut rx) = enso_channel::mpsc::channel::<u64>(capacity);
     let total_messages = producer_count * messages_per_producer;
     let barrier = Barrier::new(producer_count + 1);
     let barrier = &barrier;
@@ -218,7 +218,7 @@ fn run_enso_channel_mpsc_batch(
     messages_per_producer: usize,
     batch_size: usize,
 ) {
-    let (tx, mut rx) = enso_channel::exclusive::mpsc::channel::<u64>(capacity);
+    let (tx, mut rx) = enso_channel::mpsc::channel::<u64>(capacity);
     let total_messages = producer_count * messages_per_producer;
     let barrier = Barrier::new(producer_count + 1);
     let barrier = &barrier;

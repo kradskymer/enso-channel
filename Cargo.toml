@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 description = "High-performance lock-free ring-buffer channels inspired by LMAX Disruptor"
 repository = "https://github.com/ksm/enso_channel"
 readme = "README.md"
-keywords = ["channel", "lock-free", "ring-buffer", "spsc", "mpsc"]
+keywords = ["channel", "lock-free", "ring-buffer", "broadcast", "mpmc"]
 categories = ["concurrency", "data-structures"]
 rust-version = "1.88"
 
@@ -24,31 +24,19 @@ core_affinity = "0.8"
 hdrhistogram = "7.5.4"
 
 [[bench]]
-name = "spsc"
-harness = false
-
-[[bench]]
 name = "mpsc"
 harness = false
 
 [[bench]]
-name = "mpmc_queue"
+name = "mpmc"
 harness = false
 
 [[bench]]
-name = "fanout"
+name = "broadcast"
 harness = false
 
 [[bench]]
 name = "latency"
-harness = false
-
-[[bench]]
-name = "latency_xpsc"
-harness = false
-
-[[bench]]
-name = "ablation_pub_ex_vs_pub_mul"
 harness = false
 
 [lints.rust]

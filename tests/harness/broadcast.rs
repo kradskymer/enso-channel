@@ -2,24 +2,24 @@ use enso_channel::errors::{TryRecvError, TrySendError};
 
 use super::shared::Channel;
 
-/// Trait for fanout channels with a fixed number of receivers.
-pub trait FanoutChannel<const N: usize>: Channel {
+/// Trait for broadcast channels with a fixed number of receivers.
+pub trait BroadcastChannel<const N: usize>: Channel {
     fn channel_with_receivers(capacity: usize) -> (Self::Sender, [Self::Receiver; N]);
 }
 
-/// Adapter to test fanout channels with the shared `Channel` trait.
+/// Adapter to test broadcast channels with the shared `Channel` trait.
 /// Uses only the first receiver for contract tests.
-pub trait FanoutAdapter<const N: usize> {
+pub trait BroadcastAdapter<const N: usize> {
     type Sender;
     type Receiver;
 
-    fn channel_fanout(capacity: usize) -> (Self::Sender, [Self::Receiver; N]);
+    fn channel_broadcast(capacity: usize) -> (Self::Sender, [Self::Receiver; N]);
     fn try_send(sender: &mut Self::Sender, item: u32) -> Result<(), TrySendError>;
     fn try_recv(receiver: &mut Self::Receiver) -> Result<u32, TryRecvError>;
 }
 
-pub fn each_receiver_sees_all_items<const N: usize, C: FanoutAdapter<N>>() {
-    let (mut tx, mut rxs) = C::channel_fanout(8);
+pub fn each_receiver_sees_all_items<const N: usize, C: BroadcastAdapter<N>>() {
+    let (mut tx, mut rxs) = C::channel_broadcast(8);
 
     assert!(C::try_send(&mut tx, 1).is_ok());
     assert!(C::try_send(&mut tx, 2).is_ok());
@@ -30,8 +30,8 @@ pub fn each_receiver_sees_all_items<const N: usize, C: FanoutAdapter<N>>() {
     }
 }
 
-pub fn publisher_is_backpressured_by_slowest<C: FanoutAdapter<2>>() {
-    let (mut tx, mut rxs) = C::channel_fanout(2);
+pub fn publisher_is_backpressured_by_slowest<C: BroadcastAdapter<2>>() {
+    let (mut tx, mut rxs) = C::channel_broadcast(2);
 
     // Fill the buffer.
     assert!(C::try_send(&mut tx, 1).is_ok());
@@ -52,9 +52,9 @@ pub fn publisher_is_backpressured_by_slowest<C: FanoutAdapter<2>>() {
 /// Test that dropping the last publisher eventually disconnects all consumers.
 pub fn publisher_drop_disconnects_consumers<C, const N: usize>()
 where
-    C: FanoutAdapter<N>,
+    C: BroadcastAdapter<N>,
 {
-    let (mut tx, mut rxs) = C::channel_fanout(8);
+    let (mut tx, mut rxs) = C::channel_broadcast(8);
 
     C::try_send(&mut tx, 1).expect("send should succeed");
     drop(tx);

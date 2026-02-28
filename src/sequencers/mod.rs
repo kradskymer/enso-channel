@@ -1,7 +1,7 @@
 //! Internal sequencing building blocks.
 //!
 //! This module contains the *sealed* traits and concrete implementations that power the
-//! channel topologies (exclusive / fanout / queue).
+//! channel implementations (single-consumer, fixed-N broadcast, work-queue).
 //!
 //! ## How the pieces fit
 //!
@@ -10,15 +10,15 @@
 //! - **Producer → Consumer**: producers publish sequences and consumers discover what is
 //!   available to read.
 //!   - Concrete mechanism depends on topology:
-//!     - exclusive producer: a `published` cursor
+//!     - single-producer: a `published` cursor
 //!     - multi-producer: per-slot `slot_states`
 //!   - The consumer-facing interface is [`PublisherSeqGate`].
 //!
 //! - **Consumer → Producer**: consumers advance (consume/free) progress and producers discover
 //!   what capacity can be safely reused.
 //!   - Concrete mechanism depends on topology:
-//!     - exclusive / fanout: per-consumer `consumed` cursor(s)
-//!     - queue: per-slot consumed states + a claimed cursor sentinel for disconnect
+//!     - single-consumer / fixed-N broadcast: per-consumer `consumed` cursor(s)
+//!     - work-queue: per-slot consumed states + a claimed cursor sentinel for disconnect
 //!   - The producer-facing interface is [`ConsumerSeqGate`].
 //!
 //! [`Sequencer`] implementations sit on top of these gates:
@@ -62,7 +62,6 @@
 mod con_ex;
 mod con_fanout;
 mod con_queue;
-mod pub_ex;
 mod pub_mul;
 
 pub(crate) mod sealed {
@@ -72,7 +71,6 @@ pub(crate) mod sealed {
 pub(crate) use con_ex::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
 pub(crate) use con_fanout::{FanoutConSeqGate, FanoutConsumerSequencer};
 pub(crate) use con_queue::{QueuedConSeqGate, QueuedConsumerSequencer, QueuedConsumerWiring};
-pub(crate) use pub_ex::{ExclusivePubSeqGate, ExclusivePublisherSequencer};
 pub(crate) use pub_mul::{MultiPubSeqGate, MultiPublisherSequencer};
 
 use crate::Sequence;
@@ -125,7 +123,7 @@ pub(crate) trait PublisherSeqGate {
 pub(crate) trait ConsumerSeqGate {
     /// Returns the minimum consumed sequence across all consumers.
     ///
-    /// For fanout semantics, this is the slowest consumer (minimum of all consumer positions).
+    /// For fixed-N broadcast semantics, this is the slowest consumer (minimum of all consumer positions).
     /// The `next_seq` and `end_seq` parameters provide context about the publisher's query range,
     /// but the returned value is the actual consumer position, which may be less than `next_seq`.
     ///
@@ -151,9 +149,8 @@ mod tests {
     };
 
     use super::{
-        ConsumerSeqGate, ExclusiveConsumerSequencer, ExclusivePublisherSequencer,
-        FanoutConsumerSequencer, MultiPublisherSequencer, PublisherSeqGate, QueuedConsumerWiring,
-        Sequencer,
+        ConsumerSeqGate, ExclusiveConsumerSequencer, FanoutConsumerSequencer,
+        MultiPublisherSequencer, PublisherSeqGate, QueuedConsumerWiring, Sequencer,
     };
     use crate::{Cursor, RingBufferMeta, Sequence, errors::TryClaimError};
 
@@ -277,11 +274,6 @@ mod tests {
             Ok(_) => panic!("Should be disconnected"),
             Err(e) => panic!("Unexpected error: {:?}", e),
         }
-    }
-
-    #[test]
-    fn exclusive_publisher_sequencer_generic() {
-        run_publisher_test_suite(ExclusivePublisherSequencer::new);
     }
 
     #[test]
@@ -432,11 +424,6 @@ mod tests {
             Ok(v) => panic!("Should be disconnected, {:?}", v),
             Err(e) => panic!("Unexpected error: {:?}", e),
         }
-    }
-
-    #[test]
-    fn exclusive_publisher_sequencer_at_most() {
-        run_publisher_at_most_test_suite(ExclusivePublisherSequencer::new);
     }
 
     #[test]
