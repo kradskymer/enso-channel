@@ -1,14 +1,161 @@
+<div align="center">
+
 # enso_channel
+
+<img src="enso_channel_logo.png" alt="enso_channel logo" height="300" width="300">
+
+### **Bounded. Lock-free. Batch-native.**
+
+*A batch-first concurrency primitive for bursty, latency-sensitive systems.*
 
 [![Crates.io](https://img.shields.io/crates/v/enso_channel.svg)](https://crates.io/crates/enso_channel)
 [![Documentation](https://docs.rs/enso_channel/badge.svg)](https://docs.rs/enso_channel)
 [![License](https://img.shields.io/crates/l/enso_channel.svg)](LICENSE-MIT)
 
-High-performance lock-free ring-buffer channels with native batch support for several communication patterns.
+</div>
 
-Inspired by [LMAX Disruptor](https://github.com/LMAX-Exchange/disruptor) and [crossbeam-channel](https://github.com/crossbeam-rs/crossbeam).
+---
+
+## Table of Contents
+
+- [What is enso_channel?](#what-is-enso_channel)
+- [Design Philosophy](#design-philosophy)
+- [Non-Goals](#non-goals)
+- [Communication Patterns](#communication-patterns)
+- [System-Wide Tunability](#system-wide-tunability)
+- [Getting Started](#getting-started)
+- [Disconnection (RAII)](#disconnection-raii)
+- [Performance Characteristics](#performance-characteristics)
+- [Benchmark Overview](#benchmark-overview)
+- [Correctness & Testing](#correctness--testing)
+- [When to Use enso_channel](#when-to-use-enso_channel)
+- [Roadmap](#roadmap)
+- [License](#license)
+
+---
+
+## What is enso_channel?
+
+`enso_channel` explores a **batch-first design space** for lock-free ring-buffer channels in Rust.
+
+### Built for systems where
+
+- Burst traffic is common
+- Tail latency (p99 / p99.9) matters
+- Backpressure must be explicit
+- Memory is bounded and pre-allocated
+- Scheduling is handled at a higher layer
+
+> **Note:** If you need async/await integration, blocking APIs, or dynamic resizing — this crate is probably not for you.
+
+---
+
+## Design Philosophy
+
+`enso_channel` is a **concurrency primitive**, not a runtime.
+
+### Core Principles
+
+- **Lock-free**
+- **Bounded capacity**
+- **Pre-allocated memory**
+- **Explicit backpressure**
+- **Native batch claim/commit**
+- **No hidden scheduling**
+- **No implicit blocking**
+
+### Mental Model
+
+Instead of sending items one-by-one:
+
+```text
+1. Claim a contiguous range in the ring buffer
+2. Write into it / Read from it
+3. Commit the range
+```
+
+**Batching amortizes synchronization cost and reduces tail latency under burst workloads.**
+
+#### Inspired by
+
+- [LMAX Exchange's Disruptor](https://github.com/LMAX-Exchange/disruptor)
+- [crossbeam-channel](https://github.com/crossbeam-rs/crossbeam)
+
+#### But with
+
+- Rust-native channel ergonomics
+- Unified API across topologies
+- Clear primitive boundaries
+
+---
+
+## Non-Goals
+
+> To prevent misuse and ambiguity:
+
+- No blocking API
+- No async integration
+- No dynamic resizing
+- No built-in scheduling policy
+- No priority queues
+- No fairness guarantees beyond lock-free progress
+
+**Philosophy:** Scheduling, wake-up strategy, budgeting, priority, and flow control belong to higher layers.
+
+`enso_channel` intentionally surfaces `Full`, `Empty`, and `Disconnected` instead of hiding them behind blocking semantics.
+
+---
+
+## Communication Patterns
+
+Unified API across multiple topologies:
+
+| Pattern       | Description                         |
+| ------------- | ----------------------------------- |
+| **SPSC**      | Single Producer, Single Consumer    |
+| **MPSC**      | Multiple Producers, Single Consumer |
+| **Broadcast** | Lossless Broadcast (fixed‑N fanout) |
+| **MPMC**      | Work Distribution                   |
+
+### Key Properties
+
+- Receivers may initiate disconnect
+- MPMC receivers can be cloned
+- Broadcast topology is fixed at creation
+- Disconnection follows RAII semantics
+- All patterns support batch operations
+
+---
+
+## System-Wide Tunability
+
+Tunability in `enso_channel` is not limited to a specific topology.
+
+It emerges from its **batch-native design**.
+
+### Every pattern supports
+
+| API                                     | Description              |
+| --------------------------------------- | ------------------------ |
+| `try_send_many` / `try_recv_many`       | Batch claiming           |
+| `try_send_at_most` / `try_recv_at_most` | At-most semantics        |
+| Explicit backpressure                   | Surface `Full` / `Empty` |
+
+### This enables systematic control over
+
+- **Contention levels**
+- **Cache locality**
+- **Burst amortization**
+- **Producer/consumer balance**
+- **Tail latency behavior**
+
+> **Note:** Under high contention (e.g. MPMC), the effect is especially visible — but tunability is inherent to the design, not limited to one pattern.
+
+---
 
 ## Getting Started
+
+### Installation
 
 Add to your project:
 
@@ -16,12 +163,12 @@ Add to your project:
 cargo add enso_channel
 ```
 
-Basic usage (MPSC):
+### Example (MPSC)
 
 ```rust
-fn main() {
-    use enso_channel::mpsc;
+use enso_channel::mpsc;
 
+fn main() {
     let (mut tx, mut rx) = mpsc::channel::<u64>(64);
 
     // Single send/recv
@@ -29,7 +176,6 @@ fn main() {
     {
         let guard = rx.try_recv().unwrap();
         assert_eq!(*guard, 42);
-        // Guard should release on drop, allowing the next item to be observed.
     }
 
     // Batch send
@@ -39,238 +185,218 @@ fn main() {
     }
     batch.finish();
 
-    // Batch send with at most semantics.
-    let mut batch = tx.try_send_at_most(8, || 0).unwrap();
-    batch.fill_with(|| 100);
-    drop(batch);
-
-    // Batch recv
+    // Batch receive
     let iter = rx.try_recv_many(8).unwrap();
-    let mut count = 0;
-    for val in iter {
-        count += 1;
-        println!("{val}");
+    for v in iter {
+        println!("{v}");
     }
-    assert_eq!(count, 8);
-
-    // Batch recv with at most semantics.
-    let iter = rx.try_recv_at_most(20).unwrap();
-    let mut count = 0;
-    for val in iter {
-        count += 1;
-        println!("{val}");
-    }
-    assert_eq!(count, 8);
 }
 ```
 
-## Features
+**All topologies share a consistent API shape.**
 
-- Low latency and high throughput.
-- Batch support for sending and receiving for all patterns.
-- Multiple communication patterns:
-  - MPSC (Multi Producer Single Consumer)
-  - Broadcast (Fixed-N lossless fanout)
-  - MPMC (Multiple Producer Multiple Consumer Work Distribution)
+See [documentation](https://docs.rs/enso_channel) for additional examples.
 
-## Core Design Principles
-
-- Lock-free
-- Bounded capacity
-- Pre-allocated memory
-- Native batch support for both sending and receiving
-- Channels style API
-- Better control and tunability with batching parameters (see [work queue bench overview](#work-queue))
-
-## Trade-offs
-
-- No dynamic resizing of the channel capacity.
-- Static topology for fan-out pattern (number of consumers are fixed).
-- No blocking API
-- Back pressure is surfaced via `try_*` errors; retry/backoff is caller-controlled.
+---
 
 ## Disconnection (RAII)
 
-`enso_channel` intentionally does **not** expose an explicit `close()`/`terminate()` API.
-Instead, disconnection is expressed through RAII similar to std mpsc channels:
+`enso_channel` does **not** expose an explicit `close()` API.
 
-- Dropping the last sender disconnects receivers after already-committed items are drained.
-- Dropping the last receiver disconnects senders.
-- Send/recv batch guards commit automatically on drop; forgetting to drop a guard will
-  delay visibility/progress.
+### Disconnection follows RAII
 
-### Concurrent disconnection caveat
+- Dropping the last sender disconnects receivers (after draining committed items)
+- Dropping the last receiver disconnects senders
+- Batch guards commit automatically on drop
 
-In concurrent code, receiver-initiated disconnection is best-effort:
-a sender operation may still publish successfully even if the receiver is dropped concurrently,
-and published items may never be observed by the application.
+### Important Caveat
 
-Example:
+> **Disconnection is eventual, not transactional.**
 
-```rust
-use enso_channel::mpsc;
+A sender may still successfully publish if a receiver is dropped concurrently. Already-committed items may never be observed by the application.
 
-fn main() {
-    let (mut sender, receiver) = mpsc::channel::<u64>(16);
-    let mut batch = sender.try_send_many_default(8).unwrap();
-    // Disconnect receiver while batch guard is still alive.
-    drop(receiver);
-    // Batch guard should still be able to publish successfully, but items will never be observed.
-    batch.fill_with(|| 0);
-    batch.finish();
-    // This time will return `Disconnected`
-    let batch = sender.try_send_many_default(8);
-    matches!(batch, Err(enso_channel::errors::TrySendError::Disconnected));
-}
+#### Graceful shutdown without loss
+
+```text
+1. Stop producing
+2. Drop all senders
+3. Drain on the receiver until `Disconnected`
 ```
 
-### Graceful shutdown
+---
 
-If you **do not want to lose any items**, initiate shutdown from the **producer** side:
-stop producing new items, drop senders, then drain on the consumer until it returns `Disconnected`.
+## Performance Characteristics
 
-Practical pattern for a non-blocking drain loop (producer-first shutdown):
+### Optimized for
 
-```rust
-use enso_channel::errors::TryRecvAtMostError;
+- Burst latency
+- Tail behavior (p99 / p99.9)
+- Busy-spin workloads
+- Deterministic bounded pipelines
 
-fn main() {
-    let (mut sender, mut receiver) = enso_channel::mpsc::channel::<u64>(16);
-    sender.try_send(42).unwrap();
-    // Drop sender to initiate shutdown.
-    drop(sender);
-    // Receiver can still drain already-committed items.
-    assert_eq!(*receiver.try_recv().unwrap(), 42);
-    // After draining, receiver observes `Disconnected`.
-    loop {
-        match receiver.try_recv_at_most(64) {
-            Ok(iter) => {
-                for v in iter {
-                    let _ = *v;
-                }
-            }
-            Err(TryRecvAtMostError::Empty) => {
-                // retry/backoff/spin: caller-controlled
-            }
-            Err(TryRecvAtMostError::Disconnected) => break,
-        }
-    }
-}
+### Not optimized for
+
+- Blocking workloads
+- Async runtimes
+- Unbounded queues
+- General-purpose task scheduling
+
+---
+
+## Benchmark Overview
+
+### Benchmarks focus on
+
+- **ns per burst**
+- Mean and p99.9
+- Busy-spin `try_*` loops
+- Pinned threads (configurable)
+- Fixed buffer sizes
+
+> These measurements reflect burst-latency workloads under contention. They are not intended as general-purpose channel comparisons.
+
+The numbers below are a selected snapshot to illustrate burst-latency behavior.
+
+#### Notes
+
+- All benches in this section report **ns/burst** (lower is better)
+- The results are from a specific run on a MacBook Pro M4 (24G); your mileage may vary
+- `broadcast` measures a burst as complete when it is delivered to **all** consumers
+- These benches pin threads by default (set `ENSO_CHANNEL_PINNING=off` to disable)
+- Outputs are printed to stdout and also written as CSV + table to a local output dir (default: `benches/results`, generated and gitignored). Override with `ENSO_SPSC_OUTPUT_DIR` / `ENSO_MPSC_OUTPUT_DIR` / `ENSO_MPMC_OUTPUT_DIR` / `ENSO_BROADCAST_OUTPUT_DIR`
+
+### To reproduce
+
+```sh
+cargo bench --bench spsc
+cargo bench --bench mpsc
+cargo bench --bench mpmc
+cargo bench --bench broadcast
 ```
 
-## Benchmark Results (Selected)
+For additional workloads/topologies, run the other bench targets under `benches/`.
 
-All the following benchmarks are run on a MacBook M4-Pro with 10 cores and 24GB memory.
-The results are generated from [latency.rs](./benches/latency.rs) and detailed results can be found in [bench_results.txt](./benches/bench_results.txt).
+---
 
-**NOTE:**
+### SPSC (ns/burst)
 
-- All the latency numbers are in nanoseconds (ns) and lower is better.
-- `p_batch` and `c_batch` refer to the producer and consumer batch sizes respectively.
-- SPSC, MPSC and Fanout are measured with RTT
-- Work Queue is measured with one-way latency (producer to consumer)
+| burst | enso mean | enso p99.9 | crossbeam mean | crossbeam p99.9 |
+| ----- | --------: | ---------: | -------------: | --------------: |
+| 1     |     193.6 |        875 |          280.2 |             834 |
+| 16    |     250.1 |        792 |          578.8 |            2835 |
+| 64    |     357.0 |        792 |         1157.7 |            9047 |
+| 128   |     495.4 |       1625 |         2271.0 |           17967 |
 
-### Running benchmarks
+---
 
-To run Criterion benchmarks and supply options to Criterion, place the Criterion flags after `--` so cargo forwards them to the benchmark binary.
+### MPSC (ns/burst)
 
-Examples:
+#### 2 producers
 
-- `cargo bench --bench spsc -- --save-baseline spsc`
+| burst | enso mean | enso p99.9 | crossbeam mean | crossbeam p99.9 |
+| ----- | --------: | ---------: | -------------: | --------------: |
+| 1     |     673.1 |       2209 |         1022.6 |            7711 |
+| 16    |     988.3 |       7919 |         2735.3 |           15007 |
+| 64    |    1161.2 |       7875 |         4514.5 |           19087 |
+| 128   |    1333.4 |      12839 |         6518.1 |           36319 |
 
-> The `--save-baseline` option **requires** a baseline name (it is not a boolean flag).
+#### 4 producers
 
-To inspect available Criterion options for a built bench binary run:
+| burst | enso mean | enso p99.9 | crossbeam mean | crossbeam p99.9 |
+| ----- | --------: | ---------: | -------------: | --------------: |
+| 1     |    1272.5 |      10711 |         1274.1 |            9215 |
+| 16    |    1273.0 |       9007 |         7650.7 |           28431 |
+| 64    |    1690.1 |      11711 |        21274.8 |           49919 |
+| 128   |    2305.5 |      16295 |        35566.1 |           81663 |
 
-- `cargo bench --bench spsc -- --help`
+---
 
-### SPSC
+### Work queue / MPMC tunability (ns/burst)
 
-| Scenario                                       | Mean  | p50 | p99 | p99.9 |
-| ---------------------------------------------- | ----- | --- | --- | ----- |
-| enso_channel (single)                          | 142.0 | 125 | 250 | 458   |
-| enso_channel (p_batch=8 c_batch=8 full RTT)    | 195.7 | 167 | 375 | 584   |
-| enso_channel (p_batch=64 c_batch=64 full RTT)  | 378.9 | 375 | 708 | 1083  |
-| enso_channel (p_batch=8 c_batch=8 amortized)   | 24.5  | 20  | 46  | 73    |
-| enso_channel (p_batch=64 c_batch=64 amortized) | 5.9   | 5   | 11  | 16    |
-| crossbeam                                      | 192.2 | 208 | 292 | 417   |
-| flume                                          | 305.5 | 291 | 666 | 4792  |
+This bench measures **work distribution** (MPMC): total messages per burst = `burst * producers`,
+and the burst is complete when the set is consumed by the worker pool.
 
-### MPSC
+For `enso_channel::mpmc`, we report the best `try_send_at_most` / `try_recv_at_most` tuning
+**by lowest p99.9** among the tested `(send_limit, recv_limit)` pairs.
 
-| Scenario (2 producers)                         | Mean  | p50 | p99  | p99.9 |
-| ---------------------------------------------- | ----- | --- | ---- | ----- |
-| enso_channel (single)                          | 52.9  | 42  | 209  | 292   |
-| enso_channel (p_batch=4 c_batch=4 full RTT)    | 44.4  | 42  | 167  | 291   |
-| enso_channel (p_batch=32 c_batch=32 full RTT)  | 45.3  | 42  | 84   | 167   |
-| enso_channel (p_batch=4 c_batch=4 amortized)   | 11.1  | 10  | 41   | 72    |
-| enso_channel (p_batch=32 c_batch=32 amortized) | 1.4   | 1   | 2    | 5     |
-| crossbeam                                      | 95.1  | 83  | 250  | 292   |
-| flume                                          | 221.6 | 41  | 4083 | 8792  |
+#### P2C2
 
-| Scenario (4 producers)                         | Mean  | p50 | p99   | p99.9 |
-| ---------------------------------------------- | ----- | --- | ----- | ----- |
-| enso_channel (single)                          | 154.3 | 167 | 292   | 333   |
-| enso_channel (p_batch=4 c_batch=4 full RTT)    | 156.4 | 167 | 292   | 417   |
-| enso_channel (p_batch=32 c_batch=32 full RTT)  | 125.1 | 125 | 250   | 333   |
-| enso_channel (p_batch=4 c_batch=4 amortized)   | 39.1  | 41  | 73    | 104   |
-| enso_channel (p_batch=32 c_batch=32 amortized) | 3.9   | 3   | 7     | 10    |
-| crossbeam                                      | 104.1 | 84  | 250   | 333   |
-| flume                                          | 768.0 | 42  | 11333 | 17750 |
+| burst | enso tuning (send_limit, recv_limit) | enso mean | enso p99.9 | crossbeam mean | crossbeam p99.9 |
+| ----- | -----------------------------------: | --------: | ---------: | -------------: | --------------: |
+| 1     |                              (8, 64) |    1396.8 |       3001 |         1373.5 |            3251 |
+| 16    |                              (8, 32) |    1553.1 |       2501 |         3502.0 |            9631 |
+| 32    |                              (8, 32) |    1866.0 |       3833 |         4228.3 |           13959 |
+| 64    |                              (8, 32) |    2887.7 |       6375 |         6074.2 |           19295 |
 
-### Fanout
+#### P4C4
 
-| Scenario (1 producer 2 consumers)              | Mean  | p50 | p99  | p99.9 |
-| ---------------------------------------------- | ----- | --- | ---- | ----- |
-| enso_channel (single)                          | 458.0 | 375 | 1250 | 3958  |
-| enso_channel (p_batch=4 c_batch=4 full RTT)    | 215.6 | 167 | 541  | 708   |
-| enso_channel (p_batch=64 c_batch=64 full RTT)  | 225.3 | 209 | 250  | 375   |
-| enso_channel (p_batch=4 c_batch=4 amortized)   | 53.9  | 41  | 135  | 177   |
-| enso_channel (p_batch=64 c_batch=64 amortized) | 3.5   | 3   | 3    | 5     |
+| burst | enso tuning (send_limit, recv_limit) | enso mean | enso p99.9 | crossbeam mean | crossbeam p99.9 |
+| ----- | -----------------------------------: | --------: | ---------: | -------------: | --------------: |
+| 1     |                              (4, 32) |    1835.6 |      10295 |         2037.1 |           10591 |
+| 16    |                              (8, 64) |    2453.8 |      10215 |        11610.8 |          127679 |
+| 32    |                              (8, 32) |    4171.4 |      12463 |        15574.9 |          360703 |
+| 64    |                              (8, 64) |    7390.4 |      15503 |        20208.5 |          598527 |
 
-| Scenario (1 producer 4 consumers)              | Mean  | p50 | p99  | p99.9 |
-| ---------------------------------------------- | ----- | --- | ---- | ----- |
-| enso_channel (single)                          | 792.5 | 750 | 1375 | 7500  |
-| enso_channel (p_batch=4 c_batch=4 full RTT)    | 443.6 | 417 | 584  | 4125  |
-| enso_channel (p_batch=64 c_batch=64 full RTT)  | 497.9 | 500 | 584  | 875   |
-| enso_channel (p_batch=4 c_batch=4 amortized)   | 110.9 | 104 | 146  | 1031  |
-| enso_channel (p_batch=64 c_batch=64 amortized) | 7.8   | 7   | 9    | 13    |
+---
 
-### Work Queue
+### Broadcast / SPMC scalability (ns/burst)
 
-| Scenario (2 producers 2 consumers)             | Mean      | p50     | p99     | p99.9   |
-| ---------------------------------------------- | --------- | ------- | ------- | ------- |
-| enso_channel (single)                          | 916854.6  | 852791  | 2915125 | 2944791 |
-| enso_channel (p_batch=4 c_batch=4 full RTT)    | 209066.9  | 375     | 704125  | 705458  |
-| enso_channel (p_batch=64 c_batch=64 full RTT)  | 180003.8  | 143750  | 271833  | 276500  |
-| enso_channel (p_batch=4 c_batch=4 amortized)   | 52266.7   | 93      | 176031  | 176364  |
-| enso_channel (p_batch=64 c_batch=64 amortized) | 2812.6    | 2246    | 4247    | 4320    |
-| crossbeam                                      | 1724578.0 | 1475208 | 2951833 | 2982792 |
-| enso_channel (p_batch=4 c_batch=16 full RTT)   | 578.4     | 458     | 3000    | 22417   |
-| enso_channel (p_batch=8 c_batch=32 full RTT)   | 342.1     | 333     | 791     | 3458    |
-| enso_channel (p_batch=4 c_batch=16 amortized)  | 36.2      | 28      | 187     | 1401    |
-| enso_channel (p_batch=8 c_batch=32 amortized)  | 10.7      | 10      | 24      | 108     |
+This bench reports **ns/burst**: one producer publishes a burst,
+and the burst is complete when **all** consumers have received it.
 
-| Scenario (2 producers 4 consumers)            | Mean     | p50    | p99    | p99.9  |
-| --------------------------------------------- | -------- | ------ | ------ | ------ |
-| enso_channel (p_batch=4 c_batch=16 full RTT)  | 68429.7  | 625    | 265792 | 267542 |
-| enso_channel (p_batch=4 c_batch=32 full RTT)  | 840.6    | 833    | 1625   | 9917   |
-| enso_channel (p_batch=8 c_batch=64 full RTT)  | 497232.6 | 532625 | 553416 | 557459 |
-| enso_channel (p_batch=4 c_batch=16 amortized) | 4276.9   | 39     | 16612  | 16721  |
-| enso_channel (p_batch=4 c_batch=32 amortized) | 26.3     | 26     | 50     | 309    |
-| enso_channel (p_batch=8 c_batch=64 amortized) | 7769.3   | 8322   | 8647   | 8710   |
+| burst | C=2 mean | C=2 p99.9 | C=4 mean | C=4 p99.9 |
+| ----- | -------: | --------: | -------: | --------: |
+| 1     |    418.9 |      3417 |    751.1 |      1334 |
+| 16    |    379.6 |      1334 |    756.7 |      4251 |
+| 64    |    431.2 |      1334 |    723.3 |      1500 |
+| 128   |    414.9 |      1417 |    817.1 |      1708 |
+
+---
+
+## Correctness & Testing
+
+- **Miri clean**
+- Tested on ARM (Apple Silicon) and x86_64
+- Memory ordering documented in source
+- Loom integration planned / in progress
+
+> **Lock-free correctness and memory ordering are treated as first-class concerns.**
+
+---
+
+## When to Use enso_channel
+
+### Use it if
+
+- You control your scheduling model
+- You prefer explicit backpressure
+- Your workload is burst-heavy
+- Tail latency matters
+- You want deterministic bounded behavior
+
+### Avoid it if
+
+- You need async/await integration
+- You want blocking `recv()`
+- You prefer runtime-managed scheduling
+- You require dynamic capacity growth
+
+---
+
+## Roadmap
+
+- [ ] Loom verification
+- [ ] Additional workload benchmarks
+- [ ] More usage examples
+- [ ] Documentation expansion
+
+> **Note:** No plans for async or blocking APIs.
+
+---
 
 ## License
 
-Licensed under either of
+Licensed under either:
 
-- [Apache License, Version 2.0](LICENSE-APACHE)
-- [MIT License](LICENSE-MIT)
-
-at your option.
-
-### Contribution
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
-dual licensed as above, without any additional terms or conditions.
+- Apache License, Version 2.0
+- MIT License
