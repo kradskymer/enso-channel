@@ -1,13 +1,13 @@
 [package]
-name = "enso_channel"
+name = "enso-channel"
 version = "0.1.0"
 edition = "2024"
 authors = ["ksm"]
 license = "MIT OR Apache-2.0"
 description = "Batch-first, bounded, lock-free ring-buffer channels (MPSC/MPMC/Broadcast) for bursty, latency-sensitive systems"
-repository = "https://github.com/ksm/enso_channel"
-homepage = "https://github.com/ksm/enso_channel"
-documentation = "https://docs.rs/enso_channel"
+repository = "https://github.com/ksm/enso-channel"
+homepage = "https://github.com/ksm/enso-channel"
+documentation = "https://docs.rs/enso-channel"
 readme = "README.md"
 keywords = ["channel", "lock-free", "ring-buffer", "batch", "mpmc"]
 categories = ["concurrency", "data-structures"]

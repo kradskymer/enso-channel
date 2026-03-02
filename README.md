@@ -1,16 +1,16 @@
 <div align="center">
 
-# enso_channel
+# enso-channel
 
-<img src="enso_channel_logo.png" alt="enso_channel logo" height="300" width="300">
+<img src="enso_channel_logo.png" alt="enso-channel logo" height="300" width="300">
 
 ### **Bounded. Lock-free. Batch-native.**
 
 *A batch-first concurrency primitive for bursty, latency-sensitive systems.*
 
-[![Crates.io](https://img.shields.io/crates/v/enso_channel.svg)](https://crates.io/crates/enso_channel)
-[![Documentation](https://docs.rs/enso_channel/badge.svg)](https://docs.rs/enso_channel)
-[![License](https://img.shields.io/crates/l/enso_channel.svg)](LICENSE-MIT)
+[![Crates.io](https://img.shields.io/crates/v/enso-channel.svg)](https://crates.io/crates/enso-channel)
+[![Documentation](https://docs.rs/enso-channel/badge.svg)](https://docs.rs/enso-channel)
+[![License](https://img.shields.io/crates/l/enso-channel.svg)](LICENSE-MIT)
 
 </div>
 
@@ -18,7 +18,7 @@
 
 ## Table of Contents
 
-- [What is enso_channel?](#what-is-enso_channel)
+- [What is enso-channel?](#what-is-enso-channel)
 - [Design Philosophy](#design-philosophy)
 - [Non-Goals](#non-goals)
 - [Communication Patterns](#communication-patterns)
@@ -28,15 +28,15 @@
 - [Performance Characteristics](#performance-characteristics)
 - [Benchmark Overview](#benchmark-overview)
 - [Correctness & Testing](#correctness--testing)
-- [When to Use enso_channel](#when-to-use-enso_channel)
+- [When to Use enso-channel](#when-to-use-enso-channel)
 - [Roadmap](#roadmap)
 - [License](#license)
 
 ---
 
-## What is enso_channel?
+## What is enso-channel?
 
-`enso_channel` explores a **batch-first design space** for lock-free ring-buffer channels in Rust.
+`enso-channel` explores a **batch-first design space** for lock-free ring-buffer channels in Rust.
 
 ### Built for systems where
 
@@ -52,7 +52,7 @@
 
 ## Design Philosophy
 
-`enso_channel` is a **concurrency primitive**, not a runtime.
+`enso-channel` is a **concurrency primitive**, not a runtime.
 
 ### Core Principles
 
@@ -102,7 +102,7 @@ Instead of sending items one-by-one:
 
 **Philosophy:** Scheduling, wake-up strategy, budgeting, priority, and flow control belong to higher layers.
 
-`enso_channel` intentionally surfaces `Full`, `Empty`, and `Disconnected` instead of hiding them behind blocking semantics.
+`enso-channel` intentionally surfaces `Full`, `Empty`, and `Disconnected` instead of hiding them behind blocking semantics.
 
 ---
 
@@ -129,7 +129,7 @@ Unified API across multiple topologies:
 
 ## System-Wide Tunability
 
-Tunability in `enso_channel` is not limited to a specific topology.
+Tunability in `enso-channel` is not limited to a specific topology.
 
 It emerges from its **batch-native design**.
 
@@ -160,7 +160,7 @@ It emerges from its **batch-native design**.
 Add to your project:
 
 ```sh
-cargo add enso_channel
+cargo add enso-channel
 ```
 
 ### Example (MPSC)
@@ -195,13 +195,13 @@ fn main() {
 
 **All topologies share a consistent API shape.**
 
-See [documentation](https://docs.rs/enso_channel) for additional examples.
+See [documentation](https://docs.rs/enso-channel) for additional examples.
 
 ---
 
 ## Disconnection (RAII)
 
-`enso_channel` does **not** expose an explicit `close()` API.
+`enso-channel` does **not** expose an explicit `close()` API.
 
 ### Disconnection follows RAII
 
@@ -364,7 +364,7 @@ and the burst is complete when **all** consumers have received it.
 
 ---
 
-## When to Use enso_channel
+## When to Use enso-channel
 
 ### Use it if
 
