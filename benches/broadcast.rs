@@ -1,472 +1,376 @@
-//! Broadcast channel benchmarks for enso_channel.
+//! Latency benchmark for enso_channel broadcast (SPMC scalability) with Criterion.
 //!
-//! Tests the fixed broadcast pattern where each item is delivered
-//! to ALL consumers, with producer gating by the slowest consumer.
+//! Metric semantics:
+//! - Each Criterion inner iteration executes exactly one burst.
+//! - A burst sends exactly `burst_size` messages from one producer.
+//! - Each consumer receives the full burst (broadcast semantics).
+//! - We record a raw per-burst sample (`elapsed_ns`) and report it as burst latency (ns/burst).
 //!
-//! No direct competitor exists for lossless fixed broadcast, so we measure absolute throughput.
+//! Env vars:
+//! - `ENSO_BROADCAST_BUFFER_SIZE` (default: 4096, must be power of two)
+//! - `ENSO_BROADCAST_BURST_SIZES` (default: 1,16,64,128)
+//! - `ENSO_BROADCAST_OUTPUT` (default: both) values: csv | table | both
+//! - `ENSO_BROADCAST_TIMEOUT_SECS` (default: 300; 0 disables watchdog)
+//! - `ENSO_CHANNEL_PINNING` (default: on)
+//! - `ENSO_BROADCAST_OUTPUT_DIR` (optional, default: benches/results)
+//! - `ENSO_BROADCAST_WARMUP_BURSTS` (default: 10_000)
+//! - `ENSO_BROADCAST_MEASURE_BURSTS` (default: 100_000)
+//!
+//! Run with:
+//! - `cargo bench --bench broadcast`
 
-use std::sync::Barrier;
-use std::time::Duration;
+use std::hint::black_box;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::thread;
+use std::time::Instant;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput};
+use crossbeam_utils::{Backoff, CachePadded};
 
-mod bench_config;
+#[path = "bench_support/mod.rs"]
+mod bench_support;
 
-// Consumer and configuration constants
+use bench_support::{
+    BurstRecorder, BurstStats, CorePinning, DEFAULT_RESULTS_DIR, OutputMode, ReportRow,
+    parse_u64_env, parse_usize_env, parse_usize_list_env, resolve_output_dir,
+    spawn_timeout_watchdog, write_reports,
+};
 
-const BATCH_SIZES: [usize; 2] = [16, 64];
-const BROADCAST_P1_CONSUMER_COUNTS: [usize; 2] = [2, 4];
-const BROADCAST_PN_CONFIGS: [(usize, usize); 3] = [(2, 2), (2, 4), (4, 2)];
+const DEFAULT_BUFFER_SIZE: usize = 4096;
+const DEFAULT_BURST_SIZES: &[usize] = &[1, 16, 64, 128];
+const DEFAULT_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_WARMUP_BURSTS: u64 = 10_000;
+const DEFAULT_MEASURE_BURSTS: u64 = 100_000;
+const BENCH_NAME: &str = "broadcast";
 
-// Helper to register single-producer single + batch variants for a const consumer count
-fn register_broadcast_p1_variants<const N: usize>(
-    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
-    capacity: usize,
-    message_count: usize,
-    batch_sizes: &[usize],
-) {
-    group.throughput(Throughput::Elements((message_count * N) as u64));
-    let scenario_base = format!("cap_{capacity}/c{N}");
-
-    // single
-    group.bench_with_input(
-        BenchmarkId::new("single", &scenario_base),
-        &capacity,
-        |b, &cap| {
-            b.iter(|| run_broadcast_p1::<N>(cap, message_count));
-        },
-    );
-
-    // batches
-    for &bs in batch_sizes {
-        let scenario_batch = format!("{scenario_base}/b{bs}");
-        group.bench_with_input(
-            BenchmarkId::new("batch", &scenario_batch),
-            &(capacity, bs),
-            |b, &(cap, bs)| {
-                b.iter(|| run_broadcast_p1_batch::<N>(cap, message_count, bs));
-            },
-        );
-    }
+struct EnsoBroadcastRunner<const N: usize> {
+    burst_size: usize,
+    send_limit: usize,
+    recv_limit: usize,
+    sender: Option<enso_channel::broadcast::Sender<u64, N>>,
+    last_seen: [Arc<CachePadded<AtomicU64>>; N],
+    next_value: u64,
+    stop: Arc<AtomicBool>,
+    recorder: BurstRecorder,
+    consumer_handles: Vec<thread::JoinHandle<()>>,
 }
 
-// Helper to register multi-producer single + batch variants for a const consumer count
-fn register_broadcast_pn_variants<const N: usize>(
-    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
-    capacity: usize,
-    producers: usize,
-    messages_per_producer: usize,
-    batch_sizes: &[usize],
-) {
-    let total_messages = producers * messages_per_producer;
-    group.throughput(Throughput::Elements((total_messages * N) as u64));
+impl<const N: usize> EnsoBroadcastRunner<N> {
+    fn new(
+        buffer_size: usize,
+        burst_size: usize,
+        send_limit: usize,
+        recv_limit: usize,
+        pinning: Arc<CorePinning>,
+        warmup_bursts: u64,
+        measure_bursts: u64,
+    ) -> Self {
+        let (sender, receivers): (
+            enso_channel::broadcast::Sender<u64, N>,
+            [enso_channel::broadcast::Receiver<u64>; N],
+        ) = enso_channel::broadcast::channel(buffer_size);
 
-    let scenario_base = format!("cap_{capacity}/p{producers}_c{N}");
+        let stop = Arc::new(AtomicBool::new(false));
+        let last_seen: [Arc<CachePadded<AtomicU64>>; N] =
+            std::array::from_fn(|_| Arc::new(CachePadded::new(AtomicU64::new(0))));
 
-    // single
-    group.bench_with_input(
-        BenchmarkId::new("single", &scenario_base),
-        &(capacity, producers, messages_per_producer),
-        |b, &(cap, prod, mpp)| {
-            b.iter(|| run_broadcast_pn::<N>(cap, prod, mpp));
-        },
-    );
+        let mut consumer_handles = Vec::with_capacity(N);
+        for (consumer_idx, (mut rx, sink)) in
+            receivers.into_iter().zip(last_seen.iter()).enumerate()
+        {
+            let stop_for_thread = stop.clone();
+            let sink_for_thread = sink.clone();
+            let pinning_for_thread = pinning.clone();
+            consumer_handles.push(thread::spawn(move || {
+                pinning_for_thread.pin_current(consumer_idx + 1);
+                run_consumer_loop(&mut rx, recv_limit, sink_for_thread, stop_for_thread);
+            }));
+        }
 
-    // batches
-    for &bs in batch_sizes {
-        let scenario_batch = format!("{scenario_base}/b{bs}");
-        group.bench_with_input(
-            BenchmarkId::new("batch", &scenario_batch),
-            &(capacity, producers, messages_per_producer, bs),
-            |b, &(cap, prod, mpp, bs)| {
-                b.iter(|| run_broadcast_pn_batch::<N>(cap, prod, mpp, bs));
-            },
-        );
-    }
-}
-
-// =============================================================================
-// Broadcast channel wrapper (const generic N)
-// =============================================================================
-
-trait BroadcastSender<const N: usize>: Send {
-    fn send(&mut self, value: u64);
-}
-
-trait BroadcastReceiver: Send {
-    fn recv(&mut self) -> u64;
-}
-
-// -----------------------------------------------------------------------------
-// enso_channel::broadcast
-// -----------------------------------------------------------------------------
-
-impl<const N: usize> BroadcastSender<N> for enso_channel::broadcast::Sender<u64, N> {
-    fn send(&mut self, value: u64) {
-        let backoff = crossbeam_utils::Backoff::new();
-        loop {
-            match self.try_send(std::hint::black_box(value)) {
-                Ok(()) => return,
-                Err(enso_channel::errors::TrySendError::InsufficientCapacity { .. }) => {
-                    backoff.spin();
-                }
-                Err(enso_channel::errors::TrySendError::Disconnected) => {
-                    panic!("channel disconnected");
-                }
-            }
+        Self {
+            burst_size,
+            send_limit: send_limit.max(1),
+            recv_limit: recv_limit.max(1),
+            sender: Some(sender),
+            last_seen,
+            next_value: 1,
+            stop,
+            recorder: BurstRecorder::new(warmup_bursts, measure_bursts),
+            consumer_handles,
         }
     }
-}
 
-impl BroadcastReceiver for enso_channel::broadcast::Receiver<u64> {
-    fn recv(&mut self) -> u64 {
-        let backoff = crossbeam_utils::Backoff::new();
-        loop {
-            match self.try_recv() {
-                Ok(guard) => return *guard,
-                Err(enso_channel::errors::TryRecvError::InsufficientItems { .. }) => {
-                    backoff.spin();
-                }
-                Err(enso_channel::errors::TryRecvError::Disconnected) => {
-                    return u64::MAX; // Signal termination
-                }
-            }
-        }
-    }
-}
+    fn run_one_burst(&mut self) {
+        let backoff = Backoff::new();
+        let start = Instant::now();
 
-// =============================================================================
-// Benchmark scenarios
-// =============================================================================
+        let first = self.next_value;
+        let last = first + self.burst_size as u64 - 1;
 
-/// Broadcast with N consumers: producer sends, all consumers receive every item.
-fn run_broadcast_p1<const N: usize>(capacity: usize, message_count: usize) {
-    let (mut tx, rxs): (enso_channel::broadcast::Sender<u64, N>, _) =
-        enso_channel::broadcast::channel(capacity);
+        let sender = match self.sender.as_mut() {
+            Some(sender) => sender,
+            None => panic!("broadcast sender missing during benchmark iteration"),
+        };
 
-    let barrier = Barrier::new(N + 1);
-    let barrier = &barrier;
-
-    crossbeam_utils::thread::scope(|s| {
-        // Consumer threads
-        for mut rx in rxs {
-            s.spawn(move |_| {
-                barrier.wait();
-                for _ in 0..message_count {
-                    let v = rx.recv();
-                    if v == u64::MAX {
-                        break;
-                    }
-                    std::hint::black_box(v);
-                }
-            });
-        }
-
-        // Producer thread (main)
-        barrier.wait();
-        for i in 0..message_count as u64 {
-            tx.send(std::hint::black_box(i));
-        }
-        drop(tx);
-    })
-    .expect("threads should join");
-}
-
-/// Broadcast with N consumers and P producers.
-fn run_broadcast_pn<const N: usize>(
-    capacity: usize,
-    producer_count: usize,
-    messages_per_producer: usize,
-) {
-    let (tx, rxs): (enso_channel::broadcast::Sender<u64, N>, _) =
-        enso_channel::broadcast::channel(capacity);
-
-    let total_messages = producer_count * messages_per_producer;
-    let barrier = Barrier::new(N + producer_count);
-    let barrier = &barrier;
-
-    crossbeam_utils::thread::scope(|s| {
-        // Consumer threads
-        for mut rx in rxs {
-            s.spawn(move |_| {
-                barrier.wait();
-                let backoff = crossbeam_utils::Backoff::new();
-                for _ in 0..total_messages {
-                    backoff.reset();
-                    loop {
-                        match rx.try_recv() {
-                            Ok(guard) => {
-                                std::hint::black_box(*guard);
-                                break;
-                            }
-                            Err(enso_channel::errors::TryRecvError::InsufficientItems {
-                                ..
-                            }) => {
-                                backoff.spin();
-                            }
-                            Err(enso_channel::errors::TryRecvError::Disconnected) => {
-                                return;
-                            }
-                        }
-                    }
-                }
-            });
-        }
-
-        // Producer threads
-        for _ in 0..producer_count {
-            let mut tx = tx.clone();
-            s.spawn(move |_| {
-                barrier.wait();
-                let backoff = crossbeam_utils::Backoff::new();
-                for i in 0..messages_per_producer as u64 {
-                    backoff.reset();
-                    loop {
-                        match tx.try_send(std::hint::black_box(i)) {
-                            Ok(()) => break,
-                            Err(enso_channel::errors::TrySendError::InsufficientCapacity {
-                                ..
-                            }) => {
-                                backoff.spin();
-                            }
-                            Err(enso_channel::errors::TrySendError::Disconnected) => {
-                                panic!("channel disconnected");
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    })
-    .expect("threads should join");
-}
-
-// =============================================================================
-// Batch benchmark scenarios - enso_channel only (unique batch API advantage)
-// =============================================================================
-
-/// Batch broadcast with N consumers: producer batch-sends, all consumers batch-receive.
-fn run_broadcast_p1_batch<const N: usize>(
-    capacity: usize,
-    message_count: usize,
-    batch_size: usize,
-) {
-    let (mut tx, rxs): (enso_channel::broadcast::Sender<u64, N>, _) =
-        enso_channel::broadcast::channel(capacity);
-
-    let barrier = Barrier::new(N + 1);
-    let barrier = &barrier;
-
-    crossbeam_utils::thread::scope(|s| {
-        // Consumer threads - batch receive
-        for mut rx in rxs {
-            s.spawn(move |_| {
-                barrier.wait();
-                let mut received = 0;
-                let backoff = crossbeam_utils::Backoff::new();
-                while received < message_count {
-                    let to_recv = batch_size.min(message_count - received);
-                    backoff.reset();
-                    loop {
-                        match rx.try_recv_many(to_recv) {
-                            Ok(iter) => {
-                                for v in iter {
-                                    std::hint::black_box(*v);
-                                }
-                                received += to_recv;
-                                break;
-                            }
-                            Err(enso_channel::errors::TryRecvError::InsufficientItems {
-                                ..
-                            }) => {
-                                backoff.spin();
-                            }
-                            Err(enso_channel::errors::TryRecvError::Disconnected) => {
-                                return;
-                            }
-                        }
-                    }
-                }
-            });
-        }
-
-        // Producer thread - batch send
-        barrier.wait();
         let mut sent = 0usize;
-        let backoff = crossbeam_utils::Backoff::new();
-        while sent < message_count {
-            let to_send = batch_size.min(message_count - sent);
+        let mut next = first;
+        while sent < self.burst_size {
+            let remaining = self.burst_size - sent;
+            let limit = remaining.min(self.send_limit);
             backoff.reset();
+
             loop {
-                match tx.try_send_many(to_send, || std::hint::black_box(0u64)) {
+                match sender.try_send_at_most(limit, || std::hint::black_box(0u64)) {
                     Ok(mut batch) => {
-                        for i in 0..to_send {
-                            batch.write_next(std::hint::black_box((sent + i) as u64));
+                        let writes = batch.capacity();
+                        for _ in 0..writes {
+                            batch.write_next(std::hint::black_box(next));
+                            next += 1;
                         }
                         batch.finish();
-                        sent += to_send;
+                        sent += writes;
                         break;
                     }
-                    Err(enso_channel::errors::TrySendError::InsufficientCapacity { .. }) => {
-                        backoff.spin();
-                    }
-                    Err(enso_channel::errors::TrySendError::Disconnected) => {
-                        panic!("channel disconnected");
+                    Err(enso_channel::errors::TrySendAtMostError::Full) => backoff.spin(),
+                    Err(enso_channel::errors::TrySendAtMostError::Disconnected) => {
+                        panic!("broadcast receiver disconnected")
                     }
                 }
             }
         }
-        drop(tx);
-    })
-    .expect("threads should join");
+
+        self.next_value = last + 1;
+
+        backoff.reset();
+        loop {
+            let mut all_caught_up = true;
+            for sink in &self.last_seen {
+                let observed = sink.load(Ordering::Acquire);
+                std::hint::black_box(observed);
+                if observed < last {
+                    all_caught_up = false;
+                    break;
+                }
+            }
+
+            if all_caught_up {
+                break;
+            }
+            backoff.spin();
+        }
+
+        let elapsed_ns = start.elapsed().as_nanos() as u64;
+        self.recorder.record_burst(elapsed_ns);
+    }
+
+    fn fill_recorder(&mut self) {
+        if self.recorder.is_complete() {
+            return;
+        }
+
+        let max_extra_bursts = self.recorder.warmup_bursts() + self.recorder.target_samples();
+        let mut extra_bursts = 0u64;
+
+        while !self.recorder.is_complete() && extra_bursts < max_extra_bursts {
+            self.run_one_burst();
+            extra_bursts += 1;
+        }
+
+        if !self.recorder.is_complete() {
+            eprintln!(
+                "warning: recorder incomplete for enso/broadcast (consumers={}, burst={}, send_limit={}, recv_limit={}): measured={} target={} remaining={} extra_bursts={} max_extra_bursts={}",
+                N,
+                self.burst_size,
+                self.send_limit,
+                self.recv_limit,
+                self.recorder.measured_samples(),
+                self.recorder.target_samples(),
+                self.recorder.remaining(),
+                extra_bursts,
+                max_extra_bursts,
+            );
+        }
+    }
+
+    fn stats(&self) -> BurstStats {
+        self.recorder.stats()
+    }
 }
 
-/// Batch broadcast with N consumers and P producers.
-fn run_broadcast_pn_batch<const N: usize>(
-    capacity: usize,
-    producer_count: usize,
-    messages_per_producer: usize,
-    batch_size: usize,
+impl<const N: usize> Drop for EnsoBroadcastRunner<N> {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+
+        let _ = self.sender.take();
+
+        for handle in self.consumer_handles.drain(..) {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn run_consumer_loop(
+    rx: &mut enso_channel::broadcast::Receiver<u64>,
+    recv_limit: usize,
+    sink: Arc<CachePadded<AtomicU64>>,
+    stop: Arc<AtomicBool>,
 ) {
-    let (tx, rxs): (enso_channel::broadcast::Sender<u64, N>, _) =
-        enso_channel::broadcast::channel(capacity);
+    let backoff = Backoff::new();
 
-    let total_messages = producer_count * messages_per_producer;
-    let barrier = Barrier::new(N + producer_count);
-    let barrier = &barrier;
+    while !stop.load(Ordering::Acquire) {
+        backoff.reset();
+        loop {
+            if stop.load(Ordering::Acquire) {
+                return;
+            }
 
-    crossbeam_utils::thread::scope(|s| {
-        // Consumer threads - batch receive
-        for mut rx in rxs {
-            s.spawn(move |_| {
-                barrier.wait();
-                let mut received = 0;
-                let backoff = crossbeam_utils::Backoff::new();
-                while received < total_messages {
-                    let to_recv = batch_size.min(total_messages - received);
-                    backoff.reset();
-                    loop {
-                        match rx.try_recv_many(to_recv) {
-                            Ok(iter) => {
-                                for v in iter {
-                                    std::hint::black_box(*v);
-                                }
-                                received += to_recv;
-                                break;
-                            }
-                            Err(enso_channel::errors::TryRecvError::InsufficientItems {
-                                ..
-                            }) => {
-                                backoff.spin();
-                            }
-                            Err(enso_channel::errors::TryRecvError::Disconnected) => {
-                                return;
-                            }
-                        }
+            match rx.try_recv_at_most(recv_limit) {
+                Ok(iter) => {
+                    let mut latest = None;
+                    for value in iter {
+                        latest = Some(*black_box(value));
                     }
-                }
-            });
-        }
 
-        // Producer threads - batch send
-        for _ in 0..producer_count {
-            let mut tx = tx.clone();
-            s.spawn(move |_| {
-                barrier.wait();
-                let mut sent = 0usize;
-                let backoff = crossbeam_utils::Backoff::new();
-                while sent < messages_per_producer {
-                    let to_send = batch_size.min(messages_per_producer - sent);
-                    backoff.reset();
-                    loop {
-                        match tx.try_send_many(to_send, || std::hint::black_box(0u64)) {
-                            Ok(mut batch) => {
-                                for i in 0..to_send {
-                                    batch.write_next(std::hint::black_box((sent + i) as u64));
-                                }
-                                batch.finish();
-                                sent += to_send;
-                                break;
-                            }
-                            Err(enso_channel::errors::TrySendError::InsufficientCapacity {
-                                ..
-                            }) => {
-                                backoff.spin();
-                            }
-                            Err(enso_channel::errors::TrySendError::Disconnected) => {
-                                panic!("channel disconnected");
-                            }
-                        }
+                    if let Some(last) = latest {
+                        sink.store(last, Ordering::Release);
                     }
+                    break;
                 }
-            });
-        }
-    })
-    .expect("threads should join");
-}
-
-// =============================================================================
-// Criterion benchmark functions
-// =============================================================================
-
-fn bench_broadcast_p1(c: &mut Criterion) {
-    let capacities = bench_config::get_capacities();
-    let message_count = bench_config::get_message_count(500_000, 500_000);
-
-    let mut group = c.benchmark_group("broadcast/p1");
-    group.warm_up_time(Duration::from_millis(500));
-    group.measurement_time(Duration::from_secs(3));
-
-    for &capacity in &capacities {
-        for &n_consumers in BROADCAST_P1_CONSUMER_COUNTS.iter() {
-            match n_consumers {
-                2 => {
-                    register_broadcast_p1_variants::<2>(&mut group, capacity, message_count, &BATCH_SIZES)
+                Err(enso_channel::errors::TryRecvAtMostError::Empty) => backoff.spin(),
+                Err(enso_channel::errors::TryRecvAtMostError::Disconnected) => {
+                    return;
                 }
-                4 => {
-                    register_broadcast_p1_variants::<4>(&mut group, capacity, message_count, &BATCH_SIZES)
-                }
-                _ => unreachable!("unexpected consumer count"),
             }
         }
     }
-
-    group.finish();
 }
 
-fn bench_broadcast_pn(c: &mut Criterion) {
-    let capacities = bench_config::get_capacities();
-    let message_count = bench_config::get_message_count(500_000, 500_000);
+#[derive(Debug, Clone)]
+struct BenchSettings {
+    buffer_size: usize,
+    burst_sizes: Vec<usize>,
+    output_mode: OutputMode,
+    timeout_secs: u64,
+    output_dir: std::path::PathBuf,
+    warmup_bursts: u64,
+    measure_bursts: u64,
+}
 
-    let mut group = c.benchmark_group("broadcast/pN");
-    group.warm_up_time(Duration::from_millis(500));
-    group.measurement_time(Duration::from_secs(3));
+impl BenchSettings {
+    fn from_env() -> Self {
+        let buffer_size = parse_usize_env("ENSO_BROADCAST_BUFFER_SIZE", DEFAULT_BUFFER_SIZE);
+        let burst_sizes = parse_usize_list_env("ENSO_BROADCAST_BURST_SIZES", DEFAULT_BURST_SIZES);
+        let output_mode = OutputMode::parse_env("ENSO_BROADCAST_OUTPUT", "both");
+        let timeout_secs = parse_u64_env("ENSO_BROADCAST_TIMEOUT_SECS", DEFAULT_TIMEOUT_SECS);
+        let output_dir = resolve_output_dir("ENSO_BROADCAST_OUTPUT_DIR", DEFAULT_RESULTS_DIR);
+        let warmup_bursts = parse_u64_env("ENSO_BROADCAST_WARMUP_BURSTS", DEFAULT_WARMUP_BURSTS);
+        let measure_bursts = parse_u64_env("ENSO_BROADCAST_MEASURE_BURSTS", DEFAULT_MEASURE_BURSTS);
 
-    for &capacity in &capacities {
-        for &(producers, n_consumers) in &BROADCAST_PN_CONFIGS {
-            let messages_per_producer = message_count / producers;
-            match n_consumers {
-                2 => register_broadcast_pn_variants::<2>(
-                    &mut group,
-                    capacity,
-                    producers,
-                    messages_per_producer,
-                    &BATCH_SIZES,
-                ),
-                4 => register_broadcast_pn_variants::<4>(
-                    &mut group,
-                    capacity,
-                    producers,
-                    messages_per_producer,
-                    &BATCH_SIZES,
-                ),
-                _ => unreachable!("unexpected consumer count"),
-            }
+        Self {
+            buffer_size,
+            burst_sizes,
+            output_mode,
+            timeout_secs,
+            output_dir,
+            warmup_bursts,
+            measure_bursts,
         }
     }
-
-    group.finish();
 }
 
-criterion_group!(benches, bench_broadcast_p1, bench_broadcast_pn);
-criterion_main!(benches);
+fn bench_topology<const N: usize>(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    settings: &BenchSettings,
+    pinning: Arc<CorePinning>,
+    rows: &mut Vec<ReportRow>,
+) {
+    for &burst_size in &settings.burst_sizes {
+        let send_limit = (burst_size / 2).max(1);
+        let recv_limit = (burst_size / 2).max(1);
+
+        group.throughput(Throughput::Elements(1));
+
+        let mut scenario = EnsoBroadcastRunner::<N>::new(
+            settings.buffer_size,
+            burst_size,
+            send_limit,
+            recv_limit,
+            pinning.clone(),
+            settings.warmup_bursts,
+            settings.measure_bursts,
+        );
+
+        group.bench_function(
+            BenchmarkId::new(
+                format!(
+                    "enso_channel::broadcast/c{}_sl{}_rl{}",
+                    N, send_limit, recv_limit
+                ),
+                burst_size,
+            ),
+            |b| {
+                b.iter(|| {
+                    scenario.run_one_burst();
+                })
+            },
+        );
+
+        scenario.fill_recorder();
+
+        rows.push(ReportRow {
+            scenario: format!(
+                "enso_channel::broadcast send_limit={} recv_limit={}",
+                send_limit, recv_limit
+            ),
+            producers: 1,
+            consumers: N,
+            buffer_size: settings.buffer_size,
+            burst_size,
+            stats: scenario.stats(),
+        });
+    }
+}
+
+fn bench_latency_broadcast(
+    c: &mut Criterion,
+    settings: &BenchSettings,
+    pinning: Arc<CorePinning>,
+) -> Vec<ReportRow> {
+    let mut rows = Vec::<ReportRow>::new();
+    let mut group = c.benchmark_group(BENCH_NAME);
+
+    bench_topology::<2>(&mut group, settings, pinning.clone(), &mut rows);
+    bench_topology::<4>(&mut group, settings, pinning, &mut rows);
+
+    group.finish();
+    rows
+}
+
+fn main() {
+    let settings = BenchSettings::from_env();
+
+    if !settings.buffer_size.is_power_of_two() {
+        eprintln!(
+            "ENSO_BROADCAST_BUFFER_SIZE must be a power of two (got {}).",
+            settings.buffer_size
+        );
+        std::process::exit(2);
+    }
+
+    spawn_timeout_watchdog(settings.timeout_secs, BENCH_NAME);
+
+    let pinning = Arc::new(CorePinning::from_env("ENSO_CHANNEL_PINNING"));
+    pinning.pin_current(0);
+
+    let mut criterion = Criterion::default().configure_from_args();
+    let rows = bench_latency_broadcast(&mut criterion, &settings, pinning);
+
+    criterion.final_summary();
+    write_reports(
+        &rows,
+        settings.output_mode,
+        &settings.output_dir,
+        BENCH_NAME,
+    );
+}

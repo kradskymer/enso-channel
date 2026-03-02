@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2024"
 authors = ["ksm"]
 license = "MIT OR Apache-2.0"
-description = "High-performance lock-free ring-buffer channels inspired by LMAX Disruptor"
+description = "Batch-first, bounded, lock-free ring-buffer channels (MPSC/MPMC/Broadcast) for bursty, latency-sensitive systems"
 repository = "https://github.com/ksm/enso_channel"
+homepage = "https://github.com/ksm/enso_channel"
+documentation = "https://docs.rs/enso_channel"
 readme = "README.md"
-keywords = ["channel", "lock-free", "ring-buffer", "broadcast", "mpmc"]
+keywords = ["channel", "lock-free", "ring-buffer", "batch", "mpmc"]
 categories = ["concurrency", "data-structures"]
 rust-version = "1.88"
 
@@ -16,12 +18,15 @@ thiserror = "2"
 crossbeam-utils = "0.8.21"
 
 [dev-dependencies]
-criterion = "0.7.0"
+criterion = "0.8.2"
 paste = "1.0.15"
 crossbeam-channel = "0.5.15"
-flume = "0.12.0"
 core_affinity = "0.8"
 hdrhistogram = "7.5.4"
+
+[[bench]]
+name = "spsc"
+harness = false
 
 [[bench]]
 name = "mpsc"
@@ -33,10 +38,6 @@ harness = false
 
 [[bench]]
 name = "broadcast"
-harness = false
-
-[[bench]]
-name = "latency"
 harness = false
 
 [lints.rust]

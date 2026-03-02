@@ -1,380 +1,558 @@
-//! SPSC channel benchmarks comparing enso_channel against crossbeam-channel and flume.
+//! Latency benchmark for SPSC (SPSC, MPSC) channels with Criterion.
+//!
+//! Metric semantics:
+//! - Each Criterion inner iteration executes exactly one burst.
+//! - One burst means send+receive exactly `burst_size` messages.
+//! - We record a raw per-burst sample (`elapsed_ns`) and report it as burst latency.
+//!
+//! Env vars:
+//! - `ENSO_SPSC_BUFFER_SIZE` (default: 4096, must be power of two)
+//! - `ENSO_SPSC_BURST_SIZES` (default: 1,16,64,128)
+//! - `ENSO_SPSC_OUTPUT` (default: both) values: csv | table | both
+//! - `ENSO_SPSC_TIMEOUT_SECS` (default: 300; 0 disables watchdog)
+//! - `ENSO_CHANNEL_PINNING` (default: on)
+//! - `ENSO_SPSC_OUTPUT_DIR` (optional, default: benches/results)
+//! - `ENSO_SPSC_WARMUP_BURSTS` (default: 10_000)
+//! - `ENSO_SPSC_MEASURE_BURSTS` (default: 100_000)
+//!
+//! Run with:
+//! - `cargo bench --bench spsc`
 
-use std::sync::Barrier;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::thread;
+use std::time::Instant;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput};
 use crossbeam_utils::Backoff;
 
-pub mod bench_config;
+#[path = "bench_support/mod.rs"]
+mod bench_support;
 
-// =============================================================================
-// Benchmark configuration
-// =============================================================================
+use bench_support::{
+    BurstRecorder, BurstStats, CorePinning, DEFAULT_RESULTS_DIR, OutputMode, ReportRow,
+    parse_u64_env, parse_usize_env, parse_usize_list_env, resolve_output_dir,
+    spawn_timeout_watchdog, write_reports,
+};
 
-// Configuration constants (edit these to change bench parameters)
-const CAPACITIES: &[usize] = &[1024, 4096];
-const BATCH_SIZES: &[usize] = &[4, 16, 64];
-// Mode defaults. Default is SHORT mode; set `ENSO_CHANNEL_BENCH_LONG=1` to select LONG mode.
-const SHORT_MESSAGE_COUNT: usize = 50_000;
-const SHORT_WARMUP_MS: u64 = 1000; // ms
-const SHORT_MEASURE_SECS: u64 = 1; // s
+const DEFAULT_BUFFER_SIZE: usize = 4096;
+const DEFAULT_BURST_SIZES: &[usize] = &[1, 16, 64, 128];
+const DEFAULT_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_WARMUP_BURSTS: u64 = 10_000;
+const DEFAULT_MEASURE_BURSTS: u64 = 100_000;
+const BENCH_NAME: &str = "spsc";
 
-const LONG_MESSAGE_COUNT: usize = 1_000_000;
-const LONG_WARMUP_MS: u64 = 5000; // ms
-const LONG_MEASURE_SECS: u64 = 10; // s
-
-// =============================================================================
-// Channel abstractions for benchmarking
-// =============================================================================
-
-trait BenchChannel: Sized {
-    type Sender: Send;
-    type Receiver: Send;
-
-    fn name() -> &'static str;
-    fn bounded(capacity: usize) -> (Self::Sender, Self::Receiver);
-    fn send(tx: &mut Self::Sender, value: u64);
-    fn recv(rx: &mut Self::Receiver) -> u64;
+#[derive(Debug)]
+struct CrossbeamRunner {
+    burst_size: usize,
+    tx: Option<crossbeam_channel::Sender<u64>>,
+    sink: Arc<AtomicU64>,
+    next_value: u64,
+    stop: Arc<AtomicBool>,
+    recorder: BurstRecorder,
+    receiver: Option<thread::JoinHandle<()>>,
 }
 
-// -----------------------------------------------------------------------------
-// enso_channel::mpsc
-// -----------------------------------------------------------------------------
+impl CrossbeamRunner {
+    fn new(
+        buffer_size: usize,
+        burst_size: usize,
+        pinning: Arc<CorePinning>,
+        warmup_bursts: u64,
+        measure_bursts: u64,
+    ) -> Self {
+        let (tx, rx) = crossbeam_channel::bounded::<u64>(buffer_size);
+        let sink = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sink_for_receiver = sink.clone();
+        let stop_for_receiver = stop.clone();
 
-struct RChannelsSpsc;
+        let receiver = thread::spawn(move || {
+            pinning.pin_current(1);
+            run_crossbeam_receiver(rx, sink_for_receiver, stop_for_receiver);
+        });
 
-impl BenchChannel for RChannelsSpsc {
-    type Sender = enso_channel::mpsc::Sender<u64>;
-    type Receiver = enso_channel::mpsc::Receiver<u64>;
-
-    fn name() -> &'static str {
-        "enso_channel"
-    }
-
-    fn bounded(capacity: usize) -> (Self::Sender, Self::Receiver) {
-        enso_channel::mpsc::channel(capacity)
-    }
-
-    fn send(tx: &mut Self::Sender, value: u64) {
-        let backoff = Backoff::new();
-        loop {
-            match tx.try_send(std::hint::black_box(value)) {
-                Ok(()) => return,
-                Err(enso_channel::errors::TrySendError::InsufficientCapacity { .. }) => {
-                    backoff.spin();
-                }
-                Err(enso_channel::errors::TrySendError::Disconnected) => {
-                    panic!("channel disconnected");
-                }
-            }
+        Self {
+            burst_size,
+            tx: Some(tx),
+            sink,
+            next_value: 1,
+            stop,
+            recorder: BurstRecorder::new(warmup_bursts, measure_bursts),
+            receiver: Some(receiver),
         }
     }
 
-    fn recv(rx: &mut Self::Receiver) -> u64 {
+    fn run_one_burst(&mut self) {
         let backoff = Backoff::new();
-        loop {
-            match rx.try_recv() {
-                Ok(guard) => return *guard,
-                Err(enso_channel::errors::TryRecvError::InsufficientItems { .. }) => {
-                    backoff.spin();
-                }
-                Err(enso_channel::errors::TryRecvError::Disconnected) => {
-                    panic!("channel disconnected");
+        let start = Instant::now();
+        let first = self.next_value;
+        let last = first + self.burst_size as u64 - 1;
+
+        let tx = self
+            .tx
+            .as_ref()
+            .expect("crossbeam sender missing during benchmark iteration");
+
+        for value in first..=last {
+            backoff.reset();
+            loop {
+                match tx.try_send(std::hint::black_box(value)) {
+                    Ok(()) => break,
+                    Err(crossbeam_channel::TrySendError::Full(_)) => backoff.spin(),
+                    Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                        panic!("crossbeam receiver disconnected")
+                    }
                 }
             }
+        }
+
+        self.next_value = last + 1;
+
+        backoff.reset();
+        loop {
+            let observed = self.sink.load(Ordering::Acquire);
+            std::hint::black_box(observed);
+            if observed >= last {
+                break;
+            }
+            backoff.spin();
+        }
+
+        let elapsed_ns = start.elapsed().as_nanos() as u64;
+        self.recorder.record_burst(elapsed_ns);
+    }
+
+    fn stats(&self) -> BurstStats {
+        self.recorder.stats()
+    }
+
+    fn fill_recorder(&mut self) {
+        if self.recorder.is_complete() {
+            return;
+        }
+
+        let max_extra_bursts = self.recorder.warmup_bursts() + self.recorder.target_samples();
+        let mut extra_bursts = 0u64;
+
+        while !self.recorder.is_complete() && extra_bursts < max_extra_bursts {
+            self.run_one_burst();
+            extra_bursts += 1;
+        }
+
+        if !self.recorder.is_complete() {
+            eprintln!(
+                "warning: recorder incomplete for crossbeam/spsc (burst={}): measured={} target={} remaining={} extra_bursts={} max_extra_bursts={}",
+                self.burst_size,
+                self.recorder.measured_samples(),
+                self.recorder.target_samples(),
+                self.recorder.remaining(),
+                extra_bursts,
+                max_extra_bursts,
+            );
         }
     }
 }
 
-// -----------------------------------------------------------------------------
-// crossbeam-channel
-// -----------------------------------------------------------------------------
-
-struct CrossbeamSpsc;
-
-impl BenchChannel for CrossbeamSpsc {
-    type Sender = crossbeam_channel::Sender<u64>;
-    type Receiver = crossbeam_channel::Receiver<u64>;
-
-    fn name() -> &'static str {
-        "crossbeam"
-    }
-
-    fn bounded(capacity: usize) -> (Self::Sender, Self::Receiver) {
-        crossbeam_channel::bounded(capacity)
-    }
-
-    fn send(tx: &mut Self::Sender, value: u64) {
-        let backoff = Backoff::new();
-        loop {
-            match tx.try_send(std::hint::black_box(value)) {
-                Ok(()) => return,
-                Err(crossbeam_channel::TrySendError::Full(_)) => {
-                    backoff.spin();
-                }
-                Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
-                    panic!("channel disconnected");
-                }
-            }
+impl Drop for CrossbeamRunner {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = self.tx.take();
+        if let Some(handle) = self.receiver.take() {
+            let _ = handle.join();
         }
     }
+}
 
-    fn recv(rx: &mut Self::Receiver) -> u64 {
-        let backoff = Backoff::new();
+fn run_crossbeam_receiver(
+    rx: crossbeam_channel::Receiver<u64>,
+    sink: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+) {
+    let backoff = Backoff::new();
+
+    while !stop.load(Ordering::Acquire) {
+        backoff.reset();
         loop {
             match rx.try_recv() {
-                Ok(v) => return v,
+                Ok(value) => {
+                    sink.store(value, Ordering::Release);
+                    break;
+                }
                 Err(crossbeam_channel::TryRecvError::Empty) => {
+                    if stop.load(Ordering::Acquire) {
+                        return;
+                    }
                     backoff.spin();
                 }
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    panic!("channel disconnected");
+                    return;
                 }
             }
         }
     }
 }
 
-// -----------------------------------------------------------------------------
-// flume
-// -----------------------------------------------------------------------------
-
-struct FlumeSpsc;
-
-impl BenchChannel for FlumeSpsc {
-    type Sender = flume::Sender<u64>;
-    type Receiver = flume::Receiver<u64>;
-
-    fn name() -> &'static str {
-        "flume"
-    }
-
-    fn bounded(capacity: usize) -> (Self::Sender, Self::Receiver) {
-        flume::bounded(capacity)
-    }
-
-    fn send(tx: &mut Self::Sender, value: u64) {
-        let backoff = Backoff::new();
-        loop {
-            match tx.try_send(std::hint::black_box(value)) {
-                Ok(()) => return,
-                Err(flume::TrySendError::Full(_)) => {
-                    backoff.spin();
-                }
-                Err(flume::TrySendError::Disconnected(_)) => {
-                    panic!("channel disconnected");
-                }
-            }
-        }
-    }
-
-    fn recv(rx: &mut Self::Receiver) -> u64 {
-        let backoff = Backoff::new();
-        loop {
-            match rx.try_recv() {
-                Ok(v) => return v,
-                Err(flume::TryRecvError::Empty) => {
-                    backoff.spin();
-                }
-                Err(flume::TryRecvError::Disconnected) => {
-                    panic!("channel disconnected");
-                }
-            }
-        }
-    }
+struct EnsoMpscRunner {
+    burst_size: usize,
+    batch_size: usize,
+    recv_chunk: usize,
+    tx: Option<enso_channel::mpsc::Sender<u64>>,
+    sink: Arc<AtomicU64>,
+    next_value: u64,
+    stop: Arc<AtomicBool>,
+    recorder: BurstRecorder,
+    receiver: Option<thread::JoinHandle<()>>,
 }
 
-// =============================================================================
-// Benchmark scenarios
-// =============================================================================
+impl EnsoMpscRunner {
+    fn new(
+        buffer_size: usize,
+        burst_size: usize,
+        batch_size: usize,
+        recv_chunk: usize,
+        pinning: Arc<CorePinning>,
+        warmup_bursts: u64,
+        measure_bursts: u64,
+    ) -> Self {
+        let (tx, mut rx) = enso_channel::mpsc::channel::<u64>(buffer_size);
+        let sink = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let recv_chunk = recv_chunk.clamp(1, burst_size);
 
-/// Concurrent producer/consumer: both run in parallel threads.
-fn run_concurrent<C: BenchChannel>(capacity: usize, message_count: usize) {
-    let (mut tx, mut rx) = C::bounded(capacity);
-    let barrier = Barrier::new(2);
-    let barrier = &barrier;
+        let sink_for_receiver = sink.clone();
+        let stop_for_receiver = stop.clone();
 
-    crossbeam_utils::thread::scope(|s| {
-        // Producer thread
-        s.spawn(|_| {
-            barrier.wait();
-            for i in 0..message_count as u64 {
-                C::send(&mut tx, i);
-            }
+        let receiver = thread::spawn(move || {
+            pinning.pin_current(1);
+            run_enso_receiver(
+                &mut rx,
+                sink_for_receiver,
+                stop_for_receiver,
+                batch_size,
+                recv_chunk,
+            );
         });
 
-        // Consumer thread
-        s.spawn(|_| {
-            barrier.wait();
-            for _ in 0..message_count {
-                std::hint::black_box(C::recv(&mut rx));
+        Self {
+            burst_size,
+            batch_size,
+            recv_chunk,
+            tx: Some(tx),
+            sink,
+            next_value: 1,
+            stop,
+            recorder: BurstRecorder::new(warmup_bursts, measure_bursts),
+            receiver: Some(receiver),
+        }
+    }
+
+    fn run_one_burst(&mut self) {
+        let backoff = Backoff::new();
+        let start = Instant::now();
+        let tx = self
+            .tx
+            .as_mut()
+            .expect("enso sender missing during benchmark iteration");
+
+        let mut next = self.next_value;
+        let last = next + self.burst_size as u64 - 1;
+
+        if self.batch_size == 1 {
+            for _ in 0..self.burst_size {
+                backoff.reset();
+                loop {
+                    match tx.try_send(std::hint::black_box(next)) {
+                        Ok(()) => {
+                            next += 1;
+                            break;
+                        }
+                        Err(enso_channel::errors::TrySendError::InsufficientCapacity {
+                            ..
+                        }) => backoff.spin(),
+                        Err(enso_channel::errors::TrySendError::Disconnected) => {
+                            panic!("enso spsc receiver disconnected")
+                        }
+                    }
+                }
             }
-        });
-    })
-    .expect("threads should join");
-}
+        } else {
+            let mut sent = 0usize;
+            while sent < self.burst_size {
+                let remaining = self.burst_size - sent;
+                let to_send = remaining.min(self.batch_size);
+                backoff.reset();
 
-/// Burst: producer sends all, then consumer receives all.
-/// Tests throughput without contention.
-fn run_burst<C: BenchChannel>(capacity: usize, burst_size: usize) {
-    let (mut tx, mut rx) = C::bounded(capacity);
-
-    // Send burst (up to capacity)
-    let to_send = burst_size.min(capacity);
-    for i in 0..to_send as u64 {
-        C::send(&mut tx, i);
-    }
-
-    // Receive burst
-    for _ in 0..to_send {
-        std::hint::black_box(C::recv(&mut rx));
-    }
-}
-
-// =============================================================================
-// Batch benchmark scenarios (enso_channel only - others don't have batch API)
-// =============================================================================
-
-/// Batch burst: producer sends all in batches, then consumer receives all in batches.
-fn run_batch_burst(capacity: usize, batch_size: usize) {
-    let (mut tx, mut rx) = enso_channel::mpsc::channel::<u64>(capacity);
-
-    // Send in batches
-    let mut sent = 0usize;
-    while sent < capacity {
-        let to_send = batch_size.min(capacity - sent);
-        let mut batch = tx
-            .try_send_many(to_send, || std::hint::black_box(0u64))
-            .expect("should have space");
-        for i in 0..to_send {
-            batch.write_next(std::hint::black_box((sent + i) as u64));
+                loop {
+                    match tx.try_send_many(to_send, || std::hint::black_box(0u64)) {
+                        Ok(mut batch) => {
+                            let writes = batch.capacity();
+                            for _ in 0..writes {
+                                batch.write_next(std::hint::black_box(next));
+                                next += 1;
+                            }
+                            batch.finish();
+                            sent += writes;
+                            break;
+                        }
+                        Err(enso_channel::errors::TrySendError::InsufficientCapacity {
+                            ..
+                        }) => backoff.spin(),
+                        Err(enso_channel::errors::TrySendError::Disconnected) => {
+                            panic!("enso spsc receiver disconnected")
+                        }
+                    }
+                }
+            }
         }
-        batch.finish();
-        sent += to_send;
-    }
 
-    // Receive in batches
-    let mut received = 0usize;
-    while received < capacity {
-        let to_recv = batch_size.min(capacity - received);
-        let iter = rx.try_recv_many(to_recv).expect("should have items");
-        for v in iter {
-            std::hint::black_box(*v);
+        self.next_value = last + 1;
+
+        backoff.reset();
+        loop {
+            let observed = self.sink.load(Ordering::Acquire);
+            std::hint::black_box(observed);
+            if observed >= last {
+                break;
+            }
+            backoff.spin();
         }
-        received += to_recv;
-    }
-}
 
-// =============================================================================
-// Criterion benchmark functions
-// =============================================================================
-
-fn bench_spsc_concurrent(c: &mut Criterion) {
-    // let capacities = get_capacities();
-    let message_count = bench_config::get_message_count(SHORT_MESSAGE_COUNT, LONG_MESSAGE_COUNT);
-
-    let mut group = c.benchmark_group("spsc/concurrent");
-    group.warm_up_time(bench_config::get_warmup_time(
-        SHORT_WARMUP_MS,
-        LONG_WARMUP_MS,
-    ));
-    group.measurement_time(bench_config::get_measurement_time(
-        SHORT_MEASURE_SECS,
-        LONG_MEASURE_SECS,
-    ));
-    group.throughput(Throughput::Elements(message_count as u64));
-
-    for &capacity in CAPACITIES {
-        // enso_channel
-        group.bench_with_input(
-            BenchmarkId::new(RChannelsSpsc::name(), capacity),
-            &capacity,
-            |b, &cap| {
-                b.iter(|| run_concurrent::<RChannelsSpsc>(cap, message_count));
-            },
-        );
-
-        // crossbeam
-        group.bench_with_input(
-            BenchmarkId::new(CrossbeamSpsc::name(), capacity),
-            &capacity,
-            |b, &cap| {
-                b.iter(|| run_concurrent::<CrossbeamSpsc>(cap, message_count));
-            },
-        );
-
-        // flume
-        group.bench_with_input(
-            BenchmarkId::new(FlumeSpsc::name(), capacity),
-            &capacity,
-            |b, &cap| {
-                b.iter(|| run_concurrent::<FlumeSpsc>(cap, message_count));
-            },
-        );
+        let elapsed_ns = start.elapsed().as_nanos() as u64;
+        self.recorder.record_burst(elapsed_ns);
     }
 
-    group.finish();
-}
+    fn stats(&self) -> BurstStats {
+        self.recorder.stats()
+    }
 
-fn bench_spsc_burst(c: &mut Criterion) {
-    // let capacities = get_capacities();
+    fn fill_recorder(&mut self) {
+        if self.recorder.is_complete() {
+            return;
+        }
 
-    let mut group = c.benchmark_group("spsc/burst");
-    group.warm_up_time(bench_config::get_warmup_time(
-        SHORT_WARMUP_MS,
-        LONG_WARMUP_MS,
-    ));
-    group.measurement_time(bench_config::get_measurement_time(
-        SHORT_MEASURE_SECS,
-        LONG_MEASURE_SECS,
-    ));
+        let max_extra_bursts = self.recorder.warmup_bursts() + self.recorder.target_samples();
+        let mut extra_bursts = 0u64;
 
-    for &capacity in CAPACITIES {
-        let burst_size = capacity; // Fill to capacity
-        group.throughput(Throughput::Elements(burst_size as u64));
+        while !self.recorder.is_complete() && extra_bursts < max_extra_bursts {
+            self.run_one_burst();
+            extra_bursts += 1;
+        }
 
-        // enso_channel single-item burst
-        group.bench_with_input(
-            BenchmarkId::new(RChannelsSpsc::name(), capacity),
-            &capacity,
-            |b, &cap| {
-                b.iter(|| run_burst::<RChannelsSpsc>(cap, burst_size));
-            },
-        );
-
-        // enso_channel batch bursts (different batch sizes)
-        for &batch_size in BATCH_SIZES {
-            let param = format!("cap={}/batch={}", capacity, batch_size);
-            group.bench_with_input(
-                BenchmarkId::new("enso_channel_batch", &param),
-                &capacity,
-                move |b, &cap| {
-                    b.iter(|| run_batch_burst(cap, batch_size));
-                },
+        if !self.recorder.is_complete() {
+            eprintln!(
+                "warning: recorder incomplete for enso/spsc (burst={}, batch={}, recv_chunk={}): measured={} target={} remaining={} extra_bursts={} max_extra_bursts={}",
+                self.burst_size,
+                self.batch_size,
+                self.recv_chunk,
+                self.recorder.measured_samples(),
+                self.recorder.target_samples(),
+                self.recorder.remaining(),
+                extra_bursts,
+                max_extra_bursts,
             );
         }
+    }
+}
 
-        // crossbeam single-item burst for reference
-        group.bench_with_input(
-            BenchmarkId::new(CrossbeamSpsc::name(), capacity),
-            &capacity,
-            |b, &cap| {
-                b.iter(|| run_burst::<CrossbeamSpsc>(cap, burst_size));
-            },
+impl Drop for EnsoMpscRunner {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = self.tx.take();
+        if let Some(handle) = self.receiver.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn run_enso_receiver(
+    rx: &mut enso_channel::mpsc::Receiver<u64>,
+    sink: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    batch_size: usize,
+    recv_chunk: usize,
+) {
+    let backoff = Backoff::new();
+
+    while !stop.load(Ordering::Acquire) {
+        backoff.reset();
+
+        if batch_size == 1 {
+            loop {
+                match rx.try_recv() {
+                    Ok(value) => {
+                        sink.store(*value, Ordering::Release);
+                        break;
+                    }
+                    Err(enso_channel::errors::TryRecvError::InsufficientItems { .. }) => {
+                        if stop.load(Ordering::Acquire) {
+                            return;
+                        }
+                        backoff.spin();
+                    }
+                    Err(enso_channel::errors::TryRecvError::Disconnected) => {
+                        return;
+                    }
+                }
+            }
+        } else {
+            loop {
+                match rx.try_recv_many(recv_chunk) {
+                    Ok(iter) => {
+                        for guard in iter {
+                            sink.store(*guard, Ordering::Release);
+                        }
+                        break;
+                    }
+                    Err(enso_channel::errors::TryRecvError::InsufficientItems { .. }) => {
+                        if stop.load(Ordering::Acquire) {
+                            return;
+                        }
+                        backoff.spin();
+                    }
+                    Err(enso_channel::errors::TryRecvError::Disconnected) => {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BenchSettings {
+    buffer_size: usize,
+    burst_sizes: Vec<usize>,
+    output_mode: OutputMode,
+    timeout_secs: u64,
+    output_dir: std::path::PathBuf,
+    warmup_bursts: u64,
+    measure_bursts: u64,
+}
+
+impl BenchSettings {
+    fn from_env() -> Self {
+        let buffer_size = parse_usize_env("ENSO_SPSC_BUFFER_SIZE", DEFAULT_BUFFER_SIZE);
+        let burst_sizes = parse_usize_list_env("ENSO_SPSC_BURST_SIZES", DEFAULT_BURST_SIZES);
+        let output_mode = OutputMode::parse_env("ENSO_SPSC_OUTPUT", "both");
+        let timeout_secs = parse_u64_env("ENSO_SPSC_TIMEOUT_SECS", DEFAULT_TIMEOUT_SECS);
+        let output_dir = resolve_output_dir("ENSO_SPSC_OUTPUT_DIR", DEFAULT_RESULTS_DIR);
+        let warmup_bursts = parse_u64_env("ENSO_SPSC_WARMUP_BURSTS", DEFAULT_WARMUP_BURSTS);
+        let measure_bursts = parse_u64_env("ENSO_SPSC_MEASURE_BURSTS", DEFAULT_MEASURE_BURSTS);
+
+        Self {
+            buffer_size,
+            burst_sizes,
+            output_mode,
+            timeout_secs,
+            output_dir,
+            warmup_bursts,
+            measure_bursts,
+        }
+    }
+}
+
+fn bench_latency_spsc(
+    c: &mut Criterion,
+    settings: &BenchSettings,
+    pinning: Arc<CorePinning>,
+) -> Vec<ReportRow> {
+    let mut rows = Vec::<ReportRow>::new();
+    let mut group = c.benchmark_group(BENCH_NAME);
+
+    for &burst_size in &settings.burst_sizes {
+        group.throughput(Throughput::Elements(1));
+
+        let mut scenario = CrossbeamRunner::new(
+            settings.buffer_size,
+            burst_size,
+            pinning.clone(),
+            settings.warmup_bursts,
+            settings.measure_bursts,
         );
 
-        // flume single-item burst for reference
-        group.bench_with_input(
-            BenchmarkId::new(FlumeSpsc::name(), capacity),
-            &capacity,
-            |b, &cap| {
-                b.iter(|| run_burst::<FlumeSpsc>(cap, burst_size));
-            },
+        group.bench_function(BenchmarkId::new("crossbeam", burst_size), |b| {
+            b.iter(|| {
+                scenario.run_one_burst();
+            })
+        });
+
+        scenario.fill_recorder();
+
+        rows.push(ReportRow {
+            scenario: "crossbeam-channel".to_string(),
+            producers: 1,
+            consumers: 1,
+            buffer_size: settings.buffer_size,
+            burst_size,
+            stats: scenario.stats(),
+        });
+    }
+
+    for &burst_size in &settings.burst_sizes {
+        group.throughput(Throughput::Elements(1));
+
+        let batch_size = (burst_size / 2).max(1);
+        let recv_chunk = batch_size;
+        let mut scenario = EnsoMpscRunner::new(
+            settings.buffer_size,
+            burst_size,
+            batch_size,
+            recv_chunk,
+            pinning.clone(),
+            settings.warmup_bursts,
+            settings.measure_bursts,
         );
+
+        group.bench_function(BenchmarkId::new("enso-spsc", burst_size), |b| {
+            b.iter(|| {
+                scenario.run_one_burst();
+            })
+        });
+
+        scenario.fill_recorder();
+
+        rows.push(ReportRow {
+            scenario: format!(
+                "enso_channel send_batch={} recv_batch={}",
+                batch_size, recv_chunk
+            ),
+            producers: 1,
+            consumers: 1,
+            buffer_size: settings.buffer_size,
+            burst_size,
+            stats: scenario.stats(),
+        });
     }
 
     group.finish();
+    rows
 }
 
-criterion_group!(benches, bench_spsc_concurrent, bench_spsc_burst);
-criterion_main!(benches);
+fn main() {
+    let settings = BenchSettings::from_env();
+
+    if !settings.buffer_size.is_power_of_two() {
+        eprintln!(
+            "ENSO_SPSC_BUFFER_SIZE must be a power of two (got {}).",
+            settings.buffer_size
+        );
+        std::process::exit(2);
+    }
+
+    spawn_timeout_watchdog(settings.timeout_secs, BENCH_NAME);
+
+    let pinning = Arc::new(CorePinning::from_env("ENSO_CHANNEL_PINNING"));
+    pinning.pin_current(0);
+
+    let mut criterion = Criterion::default().configure_from_args();
+    let rows = bench_latency_spsc(&mut criterion, &settings, pinning);
+
+    criterion.final_summary();
+    write_reports(
+        &rows,
+        settings.output_mode,
+        &settings.output_dir,
+        BENCH_NAME,
+    );
+}
