@@ -1,11 +1,33 @@
-//! Multi-publisher, multi-consumer (MPMC) work queue.
+//! Multi-producer, multi-consumer (MPMC) work distribution channel.
 //!
-//! Construction follows `let (tx, rx) = channel(..)`; both endpoints may be cloned.
+//! This topology distributes items across a pool of receivers.
+//! [`Receiver<T>`] is [`Clone`], so you can spawn multiple workers that compete for work.
+//!
+//! Like other topologies in this crate, it is bounded, non-blocking, and batch-native:
+//! operations are `try_*` and surface explicit backpressure.
+//!
+//! # Capacity
+//!
+//! `capacity` must be a power of two.
+//!
+//! # Examples
+//!
+//! ```
+//! use enso_channel::mpmc;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let (mut tx, mut rx1) = mpmc::channel::<u64>(64);
+//! let mut rx2 = rx1.clone();
+//!
+//! tx.try_send(1)?;
+//! let _v = *rx1.try_recv()?;
+//! let _ = rx2.try_recv_at_most(8); // competing worker
+//! # Ok(()) }
+//! ```
 
 use std::sync::Arc;
 
 use crate::RingBuffer;
-use crate::errors::{TryRecvAtMostError, TryRecvError, TrySendAtMostError, TrySendError};
 use crate::sequencers::{
     MultiPubSeqGate, MultiPublisherSequencer, QueuedConSeqGate, QueuedConsumerSequencer,
     QueuedConsumerWiring,
@@ -17,14 +39,30 @@ type ConsumerSequencer = QueuedConsumerSequencer<MultiPubSeqGate>;
 type Publisher<T> = crate::publisher::Publisher<PublisherSequencer, T>;
 type Consumer<T> = crate::consumers::Consumer<ConsumerSequencer, T>;
 
-/// Creates a bounded work-stealing MPMC channel.
+/// Creates a bounded MPMC work distribution channel.
 ///
 /// `capacity` must be a power of two.
+///
+/// The ring buffer is pre-allocated and initialized with `T::default()`.
 pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>)
 where
     T: Default,
 {
     let ring_buffer = Arc::new(RingBuffer::init_with_default(capacity));
+    channel_with_ring(ring_buffer)
+}
+
+/// Creates a bounded MPMC work distribution channel, initializing the ring buffer with `initializer`.
+///
+/// `capacity` must be a power of two.
+///
+/// `initializer` is invoked once per slot index during pre-allocation.
+/// The bound `Copy + FnOnce(usize) -> T` allows passing non-capturing closures and function pointers while still calling the initializer multiple times.
+pub fn channel_with<T, I>(capacity: usize, initializer: I) -> (Sender<T>, Receiver<T>)
+where
+    I: Copy + FnOnce(usize) -> T,
+{
+    let ring_buffer = Arc::new(RingBuffer::init_with(capacity, initializer));
     channel_with_ring(ring_buffer)
 }
 
@@ -49,96 +87,30 @@ fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver
     (sender, receiver)
 }
 
-/// The sending half of a work-stealing MPMC channel.
-///
-/// This type is `Clone`.
-#[derive(Clone)]
-pub struct Sender<T> {
-    inner: Publisher<T>,
-}
-
-impl<T> Sender<T> {
-    pub fn try_send(&mut self, item: T) -> Result<(), TrySendError> {
-        self.inner.try_publish(item)
+channel_define_sender! {
+    /// The sending half of a work-stealing MPMC channel.
+    ///
+    /// This type is `Clone`.
+    #[derive(Clone)]
+    pub struct Sender<T> {
+        inner: Publisher<T>,
     }
-
-    pub fn try_send_many<F>(
-        &mut self,
-        n: usize,
-        factory: F,
-    ) -> Result<SendBatch<'_, T, F>, TrySendError>
-    where
-        F: Fn() -> T + Copy,
-    {
-        let inner = self.inner.try_publish_many(n, factory)?;
-        Ok(SendBatch { inner })
-    }
-
-    pub fn try_send_many_default(
-        &mut self,
-        n: usize,
-    ) -> Result<SendBatch<'_, T, fn() -> T>, TrySendError>
-    where
-        T: Default,
-    {
-        let inner = self.inner.try_publish_many_default(n)?;
-        Ok(SendBatch { inner })
-    }
-
-    pub fn try_send_at_most<F>(
-        &mut self,
-        limit: usize,
-        factory: F,
-    ) -> Result<SendBatch<'_, T, F>, TrySendAtMostError>
-    where
-        F: Fn() -> T + Copy,
-    {
-        let inner = self.inner.try_publish_at_most(limit, factory)?;
-        Ok(SendBatch { inner })
-    }
-
-    pub fn try_send_at_most_default(
-        &mut self,
-        limit: usize,
-    ) -> Result<SendBatch<'_, T, fn() -> T>, TrySendAtMostError>
-    where
-        T: Default,
-    {
-        let inner = self.inner.try_publish_at_most_default(limit)?;
-        Ok(SendBatch { inner })
-    }
+    => SendBatch = SendBatch;
 }
 
 channel_define_send_batch! {
     pub struct SendBatch<'a, T, F> = (PublisherSequencer);
 }
 
-/// The receiving half of a work-stealing channel.
-///
-/// This type is `Clone` to allow spawning multiple workers.
-#[derive(Clone)]
-pub struct Receiver<T> {
-    inner: Consumer<T>,
-}
-
-impl<T> Receiver<T> {
-    pub fn try_recv(&mut self) -> Result<RecvGuard<'_, T>, TryRecvError> {
-        let inner = self.inner.try_recv()?;
-        Ok(RecvGuard { inner })
+channel_define_receiver! {
+    /// The receiving half of a work-stealing channel.
+    ///
+    /// This type is `Clone` to allow spawning multiple workers.
+    #[derive(Clone)]
+    pub struct Receiver<T> {
+        inner: Consumer<T>,
     }
-
-    pub fn try_recv_many(&mut self, _n: usize) -> Result<RecvIter<'_, T>, TryRecvError> {
-        let inner = self.inner.try_recv_many(_n as i64)?;
-        Ok(RecvIter { inner })
-    }
-
-    pub fn try_recv_at_most(
-        &mut self,
-        limit: usize,
-    ) -> Result<RecvIter<'_, T>, TryRecvAtMostError> {
-        let inner = self.inner.try_recv_at_most(limit as i64)?;
-        Ok(RecvIter { inner })
-    }
+    => RecvGuard = RecvGuard, RecvIter = RecvIter;
 }
 
 channel_define_recv_guard! {

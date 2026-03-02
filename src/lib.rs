@@ -1,31 +1,58 @@
 #![allow(clippy::type_complexity)]
-//! enso_channel: High-performance ring-buffer based channels.
+//! enso_channel
 //!
-//! Public API modules:
-//! - `mpsc`: multi-producer, single-consumer
-//! - `broadcast`: lossless fixed-N broadcast (each receiver sees every item)
-//! - `mpmc`: multi-producer, multi-consumer work queue
+//! **Bounded. Lock-free. Batch-native.**
 //!
-//! Internal topology modules remain private implementation details.
+//! `enso_channel` is a batch-first concurrency primitive: a family of bounded, lock-free,
+//! ring-buffer channels designed for bursty, latency-sensitive systems.
 //!
-//! ## Lifecycle / shutdown
+//! The API is intentionally non-blocking: operations are exposed as `try_*` and surface
+//! backpressure/termination explicitly via errors (`Full`, `Empty`, `Disconnected`).
+//!
+//! ## Mental model
+//!
+//! Instead of sending items one-by-one, producers typically:
+//!
+//! 1. claim a contiguous range in the ring buffer,
+//! 2. write into it,
+//! 3. commit the range.
+//!
+//! Receivers observe items via RAII guards/iterators; dropping them commits consumption.
+//!
+//! ## Public API modules
+//!
+//! - [`mpsc`]: multi-producer, single-consumer
+//! - [`broadcast`]: lossless fixed-N fanout (each receiver sees every item)
+//! - [`mpmc`]: multi-producer, multi-consumer work distribution
+//!
+//! ## Non-goals
+//!
+//! - no blocking API
+//! - no async/await integration
+//! - no dynamic resizing
+//! - no built-in scheduling policy
+//!
+//! ## Lifecycle / shutdown (RAII)
 //!
 //! This crate intentionally does **not** expose an explicit `close()`/`terminate()` API.
-//! Shutdown is expressed through normal Rust endpoint lifecycle (RAII), similar to
-//!  std mpsc channels:
+//! Shutdown is expressed through normal Rust endpoint lifecycle:
 //!
 //! - dropping the last sender initiates shutdown; receivers may drain already-committed items
-//!   and then observe `Disconnected` errors;
+//!   and then observe `Disconnected`;
 //! - dropping the last receiver disconnects senders (subsequent sends return `Disconnected`).
 //!
-//! Shutdown coordination is implemented by internal sequencers and shared gates.
+//! ### Concurrency caveat
+//!
+//! Disconnection is **eventual, not transactional**.
+//! In concurrent code, an operation may still succeed while the peer endpoint is being dropped,
+//! and already-committed items may never be observed by the application.
 
 #[macro_use]
 mod channel_api_macros;
 
-pub mod mpsc;
 pub mod broadcast;
 pub mod mpmc;
+pub mod mpsc;
 
 mod ringbuffer;
 mod slot_states;

@@ -1,4 +1,4 @@
-//! Multi-publisher, single-consumer (MPSC) channel.
+//! Multi-producer, single-consumer (MPSC) channel.
 //!
 //! This module provides a bounded MPSC channel backed by a ring buffer.
 //!
@@ -12,11 +12,32 @@
 //! # Capacity
 //!
 //! `capacity` must be a power of two.
+//!
+//! # Examples
+//!
+//! ```
+//! use enso_channel::mpsc;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let (mut tx, mut rx) = mpsc::channel::<u64>(64);
+//!
+//! tx.try_send(42)?;
+//! let _v = *rx.try_recv()?;
+//!
+//! let mut batch = tx.try_send_many_default(8)?;
+//! batch.fill_with(|| 1);
+//! batch.finish();
+//!
+//! let iter = rx.try_recv_at_most(8)?;
+//! for _ in iter {
+//!     // ...
+//! }
+//! # Ok(()) }
+//! ```
 
 use std::sync::Arc;
 
 use crate::RingBuffer;
-use crate::errors::{TryRecvAtMostError, TryRecvError, TrySendAtMostError, TrySendError};
 use crate::sequencers::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
 use crate::sequencers::{MultiPubSeqGate, MultiPublisherSequencer};
 
@@ -40,6 +61,10 @@ where
 /// Creates a bounded MPSC channel, initializing the ring buffer with `initializer`.
 ///
 /// `capacity` must be a power of two.
+///
+/// `initializer` is invoked once per slot index during pre-allocation.
+/// The bound `Copy + FnOnce(usize) -> T` allows passing non-capturing closures and
+/// function pointers while still calling the initializer multiple times.
 pub fn channel_with<T, I>(capacity: usize, initializer: I) -> (Sender<T>, Receiver<T>)
 where
     I: Copy + FnOnce(usize) -> T,
@@ -72,129 +97,33 @@ fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver
     (sender, receiver)
 }
 
-/// The sending half of an MPSC channel.
-///
-/// This type is `Clone`.
-#[derive(Clone)]
-pub struct Sender<T> {
-    inner: Publisher<T>,
-}
-
-impl<T> Sender<T> {
-    /// Attempts to send a single item.
-    pub fn try_send(&mut self, item: T) -> Result<(), TrySendError> {
-        self.inner.try_publish(item)
-    }
-
-    /// Attempts to claim a contiguous range of `n` slots and returns a guard that
-    /// writes/commits the range.
+channel_define_sender! {
+    /// The sending half of an MPSC channel.
     ///
-    /// The returned batch commits automatically on drop.
-    pub fn try_send_many<F>(
-        &mut self,
-        n: usize,
-        factory: F,
-    ) -> Result<SendBatch<'_, T, F>, TrySendError>
-    where
-        F: Fn() -> T + Copy,
-    {
-        let inner = self.inner.try_publish_many(n, factory)?;
-        Ok(SendBatch { inner })
+    /// This type is `Clone`.
+    #[derive(Clone)]
+    pub struct Sender<T> {
+        inner: Publisher<T>,
     }
-
-    /// Attempts to claim a contiguous range of `n` slots using `T::default()` as the fill factory.
-    pub fn try_send_many_default(
-        &mut self,
-        n: usize,
-    ) -> Result<SendBatch<'_, T, fn() -> T>, TrySendError>
-    where
-        T: Default,
-    {
-        let inner = self.inner.try_publish_many_default(n)?;
-        Ok(SendBatch { inner })
-    }
-
-    /// Attempts to send up to `limit` items, claiming as many slots as available.
-    ///
-    /// Returns a batch with the actually claimed slots (1..=limit).
-    /// Returns `Full` if zero slots are available.
-    pub fn try_send_at_most<F>(
-        &mut self,
-        limit: usize,
-        factory: F,
-    ) -> Result<SendBatch<'_, T, F>, TrySendAtMostError>
-    where
-        F: Fn() -> T + Copy,
-    {
-        let inner = self.inner.try_publish_at_most(limit, factory)?;
-        Ok(SendBatch { inner })
-    }
-
-    /// Attempts to send up to `limit` items using `T::default()` as the fill factory.
-    pub fn try_send_at_most_default(
-        &mut self,
-        limit: usize,
-    ) -> Result<SendBatch<'_, T, fn() -> T>, TrySendAtMostError>
-    where
-        T: Default,
-    {
-        let inner = self.inner.try_publish_at_most_default(limit)?;
-        Ok(SendBatch { inner })
-    }
+    => SendBatch = SendBatch;
 }
 
 channel_define_send_batch! {
-    /// A guard representing an already-claimed contiguous range of slots.
-    ///
-    /// This is returned by [`Sender::try_send_many`].
     pub struct SendBatch<'a, T, F> = (PublisherSequencer);
 }
 
-/// The receiving half of an MPSC channel.
-pub struct Receiver<T> {
-    inner: Consumer<T>,
-}
-
-impl<T> Receiver<T> {
-    /// Attempts to receive a single item.
-    ///
-    /// The returned guard commits the consumed sequence on drop.
-    pub fn try_recv(&mut self) -> Result<RecvGuard<'_, T>, TryRecvError> {
-        let inner = self.inner.try_recv()?;
-        Ok(RecvGuard { inner })
+channel_define_receiver! {
+    /// The receiving half of an MPSC channel.
+    pub struct Receiver<T> {
+        inner: Consumer<T>,
     }
-
-    /// Attempts to receive up to `n` items.
-    ///
-    /// The returned iterator commits the consumed range on drop.
-    pub fn try_recv_many(&mut self, n: usize) -> Result<RecvIter<'_, T>, TryRecvError> {
-        let inner = self.inner.try_recv_many(n as i64)?;
-        Ok(RecvIter { inner })
-    }
-
-    /// Attempts to receive up to `limit` items, consuming as many as available.
-    ///
-    /// Returns an iterator with the actually consumed items (1..=limit).
-    /// Returns `Empty` if zero items are available.
-    pub fn try_recv_at_most(
-        &mut self,
-        limit: usize,
-    ) -> Result<RecvIter<'_, T>, TryRecvAtMostError> {
-        let inner = self.inner.try_recv_at_most(limit as i64)?;
-        Ok(RecvIter { inner })
-    }
+    => RecvGuard = RecvGuard, RecvIter = RecvIter;
 }
 
 channel_define_recv_guard! {
-    /// RAII guard for a received item.
-    ///
-    /// Dereferences to `&T`.
     pub struct RecvGuard<'a, T> = (ConsumerSequencer);
 }
 
 channel_define_recv_iter! {
-    /// Iterator over a received range.
-    ///
-    /// Yields `&T` and commits the full range on drop.
     pub struct RecvIter<'a, T> = (ConsumerSequencer);
 }

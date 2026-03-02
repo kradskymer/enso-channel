@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
+pub mod broadcast;
 pub mod concurrency;
 pub mod contracts;
-pub mod mpsc;
-pub mod broadcast;
 pub mod mpmc;
+pub mod mpsc;
 pub mod shared;
 
 /// Macro to generate contract tests for a channel implementation.

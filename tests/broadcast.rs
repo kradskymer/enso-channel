@@ -4,7 +4,7 @@ mod harness;
 use harness::broadcast as h;
 use harness::contracts::InduceUncommittedClaim;
 use harness::shared::Channel;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 struct BroadcastFanout2;
 
