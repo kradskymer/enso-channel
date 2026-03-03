@@ -42,11 +42,11 @@ where
         })
     }
 
-    pub fn try_recv_many(&mut self, n: i64) -> Result<ReadIter<'_, C, T>, TryRecvError> {
+    pub fn try_recv_many(&mut self, n: i64) -> Result<ReadBatch<'_, C, T>, TryRecvError> {
         assert!(n > 0, "n must be positive");
 
         let (start_seq, end_seq) = self.consumer_sequencer.try_claim_n(n)?;
-        Ok(ReadIter::new(
+        Ok(ReadBatch::new(
             &self.consumer_sequencer,
             &self.ring_buffer,
             start_seq,
@@ -57,11 +57,11 @@ where
     pub fn try_recv_at_most(
         &mut self,
         limit: i64,
-    ) -> Result<ReadIter<'_, C, T>, TryRecvAtMostError> {
+    ) -> Result<ReadBatch<'_, C, T>, TryRecvAtMostError> {
         assert!(limit > 0, "limit must be > 0");
 
         let (start_seq, end_seq) = self.consumer_sequencer.try_claim_at_most(limit)?;
-        Ok(ReadIter::new(
+        Ok(ReadBatch::new(
             &self.consumer_sequencer,
             &self.ring_buffer,
             start_seq,
@@ -100,18 +100,24 @@ where
     }
 }
 
-pub struct ReadIter<'a, C, T>
+/// A claimed receive range that commits consumption on drop.
+///
+/// This type intentionally does **not** implement `Iterator<Item = &T>` directly.
+/// Exposing `&T` via a standard iterator would allow references to outlive the guard
+/// while still committing the entire range (making slot reuse possible and risking UB).
+///
+/// Use [`ReadBatch::iter`] to iterate safely.
+pub struct ReadBatch<'a, C, T>
 where
     C: Sequencer,
 {
-    pub(super) consumer_sequencer: &'a C,
-    pub(super) ring_buffer: &'a RingBuffer<T>,
-    pub(super) current_seq: Sequence,
-    pub(super) start_seq: Sequence,
-    pub(super) end_seq: Sequence,
+    consumer_sequencer: &'a C,
+    ring_buffer: &'a RingBuffer<T>,
+    start_seq: Sequence,
+    end_seq: Sequence,
 }
 
-impl<'a, C, T> ReadIter<'a, C, T>
+impl<'a, C, T> ReadBatch<'a, C, T>
 where
     C: Sequencer,
 {
@@ -124,17 +130,47 @@ where
         Self {
             consumer_sequencer,
             ring_buffer,
-            current_seq: start_seq,
             start_seq,
             end_seq,
         }
     }
+
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
+        ReadBatchIter {
+            ring_buffer: self.ring_buffer,
+            current_seq: self.start_seq,
+            end_seq: self.end_seq,
+        }
+    }
+
+    /// Commits the claimed range immediately.
+    ///
+    /// This is equivalent to dropping the guard, but can be more ergonomic in
+    /// long functions where an explicit commit point avoids extra scopes.
+    #[inline]
+    pub fn finish(self) {
+        drop(self);
+    }
 }
 
-impl<'a, C, T> Iterator for ReadIter<'a, C, T>
+impl<C, T> Drop for ReadBatch<'_, C, T>
 where
     C: Sequencer,
 {
+    fn drop(&mut self) {
+        self.consumer_sequencer
+            .commit_range(self.start_seq, self.end_seq);
+    }
+}
+
+struct ReadBatchIter<'a, T> {
+    ring_buffer: &'a RingBuffer<T>,
+    current_seq: Sequence,
+    end_seq: Sequence,
+}
+
+impl<'a, T> Iterator for ReadBatchIter<'a, T> {
     type Item = &'a T;
 
     #[inline]
@@ -145,15 +181,5 @@ where
         let slot = self.ring_buffer.get_ref_at(self.current_seq);
         self.current_seq += 1;
         Some(slot)
-    }
-}
-
-impl<'a, C, T> Drop for ReadIter<'a, C, T>
-where
-    C: Sequencer,
-{
-    fn drop(&mut self) {
-        self.consumer_sequencer
-            .commit_range(self.start_seq, self.end_seq);
     }
 }

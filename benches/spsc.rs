@@ -399,7 +399,7 @@ fn run_enso_receiver(
             loop {
                 match rx.try_recv_many(recv_chunk) {
                     Ok(iter) => {
-                        for guard in iter {
+                        for guard in iter.iter() {
                             sink.store(*guard, Ordering::Release);
                         }
                         break;

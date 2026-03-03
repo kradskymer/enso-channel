@@ -11,7 +11,7 @@ fn main() {
     loop {
         match receiver.try_recv_at_most(64) {
             Ok(iter) => {
-                for v in iter {
+                for v in iter.iter() {
                     let _ = *v;
                 }
             }

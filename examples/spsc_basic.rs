@@ -24,20 +24,24 @@ fn main() {
     drop(batch);
 
     // Batch recv
-    let iter = rx.try_recv_many(8).unwrap();
-    let mut count = 0;
-    for val in iter {
-        count += 1;
-        println!("{val}");
+    {
+        let iter = rx.try_recv_many(8).unwrap();
+        let mut count = 0;
+        for val in iter.iter() {
+            count += 1;
+            println!("{val}");
+        }
+        assert_eq!(count, 8);
     }
-    assert_eq!(count, 8);
 
     // Batch recv with at most semantics.
-    let iter = rx.try_recv_at_most(20).unwrap();
-    let mut count = 0;
-    for val in iter {
-        count += 1;
-        println!("{val}");
+    {
+        let iter = rx.try_recv_at_most(20).unwrap();
+        let mut count = 0;
+        for val in iter.iter() {
+            count += 1;
+            println!("{val}");
+        }
+        assert_eq!(count, 8);
     }
-    assert_eq!(count, 8);
 }

@@ -28,8 +28,8 @@
 //! batch.fill_with(|| 1);
 //! batch.finish();
 //!
-//! let iter = rx.try_recv_at_most(8)?;
-//! for _ in iter {
+//! let batch = rx.try_recv_at_most(8)?;
+//! for _ in batch.iter() {
 //!     // ...
 //! }
 //! # Ok(()) }

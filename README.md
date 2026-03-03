@@ -186,8 +186,8 @@ fn main() {
     batch.finish();
 
     // Batch receive
-    let iter = rx.try_recv_many(8).unwrap();
-    for v in iter {
+    let guard = rx.try_recv_many(8).unwrap();
+    for v in guard.iter() {
         println!("{v}");
     }
 }

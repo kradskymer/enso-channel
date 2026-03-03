@@ -216,7 +216,7 @@ macro_rules! channel_define_receiver {
 
 			/// Attempts to receive up to `n` items.
 			///
-			/// The returned iterator commits the consumed range on drop.
+			/// The returned batch commits the consumed range on drop.
 			///
 			/// # Panics
 			///
@@ -228,7 +228,7 @@ macro_rules! channel_define_receiver {
 
 			/// Attempts to receive up to `limit` items, consuming as many as available.
 			///
-			/// Returns an iterator with the actually consumed items (1..=limit).
+			/// Returns a batch with the actually consumed items (1..=limit).
 			/// Returns `Empty` if zero items are available.
 			///
 			/// # Panics
@@ -438,20 +438,29 @@ macro_rules! channel_define_recv_iter {
 	(
 		$vis:vis struct $name:ident < $lt:lifetime, T > = ( $consumer_sequencer:ty );
 	) => {
-		/// Iterator over a received range.
+		/// A batch view over a received range.
 		///
-		/// Yields `&T` and commits the full range on drop.
+		/// This guard commits the full claimed range on drop.
 		///
-		/// Dropping the iterator early commits the whole claimed range.
+		/// Use [`Self::iter`] to iterate over `&T` safely.
 		$vis struct $name<$lt, T> {
-			inner: $crate::consumers::ReadIter<$lt, $consumer_sequencer, T>,
+			inner: $crate::consumers::ReadBatch<$lt, $consumer_sequencer, T>,
 		}
 
-		impl<$lt, T: $lt> ::std::iter::Iterator for $name<$lt, T> {
-			type Item = &$lt T;
+		impl<$lt, T: $lt> $name<$lt, T> {
+			/// Iterates the items in this batch.
+			///
+			/// The returned iterator yields `&T` values whose lifetime is tied to the borrow
+			/// of this batch guard, preventing them from outliving the commit-on-drop boundary.
+			pub fn iter(&self) -> impl ::std::iter::Iterator<Item = &T> + '_ {
+				self.inner.iter()
+			}
 
-			fn next(&mut self) -> Option<Self::Item> {
-				self.inner.next()
+			/// Commits the claimed range immediately.
+			///
+			/// This is equivalent to dropping the guard.
+			pub fn finish(self) {
+				self.inner.finish();
 			}
 		}
 	};

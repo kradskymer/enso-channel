@@ -510,7 +510,7 @@ fn run_enso_receiver(
                             match rx.try_recv_at_most(limit) {
                                 Ok(iter) => {
                                     let mut chunk = 0usize;
-                                    for guard in iter {
+                                    for guard in iter.iter() {
                                         std::hint::black_box(*guard);
                                         chunk += 1;
                                     }

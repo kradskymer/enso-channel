@@ -228,7 +228,7 @@ fn run_consumer_loop(
             match rx.try_recv_at_most(recv_limit) {
                 Ok(iter) => {
                     let mut latest = None;
-                    for value in iter {
+                    for value in iter.iter() {
                         latest = Some(*black_box(value));
                     }
 

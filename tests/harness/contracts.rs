@@ -5,14 +5,14 @@
 
 use enso_channel::errors::{TryRecvAtMostError, TryRecvError, TrySendAtMostError, TrySendError};
 
-use super::shared::Channel;
+use super::shared::{Channel, RecvBatchU32};
 
 /// Test-only capability: induce a state where a publisher has successfully *claimed*
 /// a range but failed to *publish/commit* it.
 ///
 /// This is used to validate shutdown/disconnect behavior in the presence of
 /// mismatched claim vs publish progress (e.g., panics in user-provided factories).
-pub trait InduceUncommittedClaim: Channel {
+pub trait InduceUncommittedSend: Channel {
     /// Advances internal claim state without committing/publishing the claimed range.
     fn induce_uncommitted_claim(sender: &mut Self::Sender, n: usize);
 }
@@ -172,7 +172,7 @@ pub fn contract_publisher_drop_disconnects_consumers<C: Channel>() {
 /// The receiver should not wait for sequences that were never published.
 pub fn contract_publisher_drop_disconnects_consumers_with_uncommitted_claims<C>()
 where
-    C: Channel + InduceUncommittedClaim,
+    C: Channel + InduceUncommittedSend,
 {
     let (mut tx, mut rx) = C::channel(8);
 
@@ -302,4 +302,90 @@ pub fn contract_claim_exceeds_capacity<C: Channel>() {
         .expect("recv should fit the capacity")
         .len();
     assert_eq!(actual_recv, capacity, "should recv up to capacity");
+}
+
+// ============================================================================
+// Batch receive guard contracts (RecvIter + .iter())
+// ============================================================================
+
+/// Contract: `try_recv_many` returns a batch whose `.iter()` yields FIFO items.
+pub fn contract_recv_many_batch_iter_yields_fifo<C: Channel>() {
+    let (mut tx, mut rx) = C::channel(8);
+
+    for i in 0..5u32 {
+        C::try_send(&mut tx, i).expect("send should succeed");
+    }
+
+    let batch = C::try_recv_many_batch(&mut rx, 5).expect("recv_many should succeed");
+    let got = batch.to_vec();
+    assert_eq!(got, vec![0, 1, 2, 3, 4]);
+}
+
+/// Contract: capacity is not freed until the recv batch is committed.
+///
+/// This prevents publishers from reusing slots while a consumer might still hold `&T` from the
+/// batch's `.iter()`.
+pub fn contract_recv_batch_holds_capacity_until_commit<C: Channel>() {
+    let capacity = 4;
+    let (mut tx, mut rx) = C::channel(capacity);
+
+    for i in 0..capacity as u32 {
+        C::try_send(&mut tx, i).expect("fill within capacity should succeed");
+    }
+
+    let batch = C::try_recv_many_batch(&mut rx, 2).expect("recv_many should succeed");
+
+    match C::try_send(&mut tx, 99) {
+        Err(TrySendError::InsufficientCapacity { missing }) => {
+            assert_eq!(missing, 1, "expected missing=1 while batch is live");
+        }
+        Err(e) => panic!("expected InsufficientCapacity while batch is live, got {e:?}"),
+        Ok(()) => panic!("expected backpressure while batch is live"),
+    }
+
+    drop(batch);
+
+    C::try_send(&mut tx, 99).expect("send after batch commit-on-drop should succeed");
+}
+
+/// Contract: calling `finish()` commits immediately (equivalent to drop).
+pub fn contract_recv_batch_finish_commits_immediately<C: Channel>() {
+    let capacity = 4;
+    let (mut tx, mut rx) = C::channel(capacity);
+
+    for i in 0..capacity as u32 {
+        C::try_send(&mut tx, i).expect("fill within capacity should succeed");
+    }
+
+    let batch = C::try_recv_many_batch(&mut rx, 2).expect("recv_many should succeed");
+    batch.finish();
+
+    C::try_send(&mut tx, 123).expect("send after batch.finish() should succeed");
+}
+
+/// Contract: `try_recv_at_most` batch contains no more than the available items.
+pub fn contract_recv_at_most_batch_is_bounded<C: Channel>() {
+    let (mut tx, mut rx) = C::channel(8);
+
+    C::try_send(&mut tx, 1).unwrap();
+    C::try_send(&mut tx, 2).unwrap();
+
+    let batch = C::try_recv_at_most_batch(&mut rx, 5).expect("recv_at_most should succeed");
+    let got = batch.to_vec();
+    assert_eq!(got, vec![1, 2]);
+}
+
+/// Contract: dropping a batch commits even if it is never iterated.
+pub fn contract_recv_batch_drop_commits_without_iteration<C: Channel>() {
+    let (mut tx, mut rx) = C::channel(8);
+
+    for i in 0..4u32 {
+        C::try_send(&mut tx, i).unwrap();
+    }
+
+    let batch = C::try_recv_many_batch(&mut rx, 2).unwrap();
+    drop(batch);
+
+    let batch2 = C::try_recv_many_batch(&mut rx, 2).unwrap();
+    assert_eq!(batch2.to_vec(), vec![2, 3]);
 }

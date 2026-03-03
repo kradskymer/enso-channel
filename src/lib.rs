@@ -19,6 +19,56 @@
 //!
 //! Receivers observe items via RAII guards/iterators; dropping them commits consumption.
 //!
+//! ## Misuse prevention (compile-time)
+//!
+//! Batch receives return a guard that commits consumption on drop. To keep this sound,
+//! the guard is intentionally *not* an `Iterator<Item = &T>`.
+//!
+//! ```compile_fail
+//! use enso_channel::mpsc;
+//! # fn main() {
+//! let (mut tx, mut rx) = mpsc::channel::<u64>(4);
+//! tx.try_send(1).unwrap();
+//! let batch = rx.try_recv_many(1).unwrap();
+//! // `RecvIter` is not an iterator; use `batch.iter()` instead.
+//! for v in batch {
+//!     let _ = v;
+//! }
+//! # }
+//! ```
+//!
+//! References yielded by `batch.iter()` are tied to the borrow of the batch guard and
+//! cannot outlive it:
+//!
+//! ```compile_fail
+//! use enso_channel::mpsc;
+//! # fn main() {
+//! let (mut tx, mut rx) = mpsc::channel::<u64>(4);
+//! tx.try_send(1).unwrap();
+//!
+//! let r: &u64 = {
+//!     let batch = rx.try_recv_many(1).unwrap();
+//!     batch.iter().next().unwrap()
+//! };
+//! let _ = *r;
+//! # }
+//! ```
+//!
+//! And you can't commit (drop/`finish`) the guard while holding a reference from it:
+//!
+//! ```compile_fail
+//! use enso_channel::mpsc;
+//! # fn main() {
+//! let (mut tx, mut rx) = mpsc::channel::<u64>(4);
+//! tx.try_send(1).unwrap();
+//!
+//! let batch = rx.try_recv_many(1).unwrap();
+//! let first = batch.iter().next().unwrap();
+//! batch.finish();
+//! let _ = *first;
+//! # }
+//! ```
+//!
 //! ## Public API modules
 //!
 //! - [`mpsc`]: multi-producer, single-consumer

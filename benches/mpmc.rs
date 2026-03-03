@@ -563,7 +563,7 @@ fn run_enso_consumer(
 
             match rx.try_recv_at_most(limit) {
                 Ok(iter) => {
-                    for guard in iter {
+                    for guard in iter.iter() {
                         std::hint::black_box(*guard);
                         received += 1;
                     }

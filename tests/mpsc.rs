@@ -2,7 +2,7 @@
 mod harness;
 
 use harness::mpsc as h;
-use harness::shared::Channel;
+use harness::shared::{Channel, RecvBatchU32};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 struct MpscChan;
@@ -10,6 +10,11 @@ struct MpscChan;
 impl Channel for MpscChan {
     type Sender = enso_channel::mpsc::Sender<u32>;
     type Receiver = enso_channel::mpsc::Receiver<u32>;
+
+    type RecvBatch<'a>
+        = enso_channel::mpsc::RecvIter<'a, u32>
+    where
+        Self::Receiver: 'a;
 
     fn channel(capacity: usize) -> (Self::Sender, Self::Receiver) {
         enso_channel::mpsc::channel::<u32>(capacity)
@@ -26,12 +31,12 @@ impl Channel for MpscChan {
         let guard = receiver.try_recv()?;
         Ok(*guard)
     }
-    fn try_recv_many(
-        receiver: &mut Self::Receiver,
-        max_items: usize,
-    ) -> Result<Vec<u32>, enso_channel::errors::TryRecvError> {
-        let guards = receiver.try_recv_many(max_items)?;
-        Ok(guards.copied().collect())
+
+    fn try_recv_many_batch<'a>(
+        receiver: &'a mut Self::Receiver,
+        n: usize,
+    ) -> Result<Self::RecvBatch<'a>, enso_channel::errors::TryRecvError> {
+        receiver.try_recv_many(n)
     }
 
     fn try_send_many(
@@ -53,12 +58,11 @@ impl Channel for MpscChan {
         Ok(n)
     }
 
-    fn try_recv_at_most(
-        receiver: &mut Self::Receiver,
-        max_items: usize,
-    ) -> Result<Vec<u32>, enso_channel::errors::TryRecvAtMostError> {
-        let guards = receiver.try_recv_at_most(max_items)?;
-        Ok(guards.copied().collect())
+    fn try_recv_at_most_batch<'a>(
+        receiver: &'a mut Self::Receiver,
+        limit: usize,
+    ) -> Result<Self::RecvBatch<'a>, enso_channel::errors::TryRecvAtMostError> {
+        receiver.try_recv_at_most(limit)
     }
 }
 
@@ -80,7 +84,7 @@ impl h::CloneSender for MpscChan {
     }
 }
 
-impl harness::contracts::InduceUncommittedClaim for MpscChan {
+impl harness::contracts::InduceUncommittedSend for MpscChan {
     fn induce_uncommitted_claim(sender: &mut Self::Sender, n: usize) {
         fn panic_factory() -> u32 {
             panic!("intentional panic to skip publish")
@@ -97,6 +101,16 @@ impl harness::contracts::InduceUncommittedClaim for MpscChan {
     }
 }
 
+impl<'a> RecvBatchU32 for enso_channel::mpsc::RecvIter<'a, u32> {
+    fn to_vec(&self) -> Vec<u32> {
+        self.iter().copied().collect()
+    }
+
+    fn finish(self) {
+        enso_channel::mpsc::RecvIter::finish(self)
+    }
+}
+
 // ============================================================================
 // Contract tests via macro
 // ============================================================================
@@ -108,6 +122,11 @@ generate_contract_tests_prefixed!(
         contract_fifo_order,
         contract_capacity_backpressure,
         contract_recv_empty,
+        contract_recv_many_batch_iter_yields_fifo,
+        contract_recv_batch_holds_capacity_until_commit,
+        contract_recv_batch_finish_commits_immediately,
+        contract_recv_at_most_batch_is_bounded,
+        contract_recv_batch_drop_commits_without_iteration,
         contract_publisher_drop_disconnects_consumers,
         contract_publisher_drop_disconnects_consumers_with_uncommitted_claims,
         contract_consumer_drop_disconnects_publishers,
