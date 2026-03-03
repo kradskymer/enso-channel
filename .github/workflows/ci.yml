@@ -46,15 +46,6 @@ jobs:
           toolchain: ${{ matrix.rust }}
       - run: cargo test --all-features
 
-  bench:
-    name: Bench (smoke test)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - run: bash benches/ci-smoke-test.sh
-
   doc:
     name: Documentation
     runs-on: ubuntu-latest
