@@ -73,8 +73,8 @@ pub(crate) use con_fanout::{FanoutConSeqGate, FanoutConsumerSequencer};
 pub(crate) use con_queue::{QueuedConSeqGate, QueuedConsumerSequencer, QueuedConsumerWiring};
 pub(crate) use pub_mul::{MultiPubSeqGate, MultiPublisherSequencer};
 
-use crate::Sequence;
 use crate::errors::TryClaimError;
+use crate::Sequence;
 
 /// Internal sequencing contract used by publisher/consumer infrastructure.
 ///
@@ -144,15 +144,15 @@ pub(crate) trait ConsumerSeqGate {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        Arc,
         atomic::{AtomicI64, Ordering},
+        Arc,
     };
 
     use super::{
         ConsumerSeqGate, ExclusiveConsumerSequencer, FanoutConsumerSequencer,
         MultiPublisherSequencer, PublisherSeqGate, QueuedConsumerWiring, Sequencer,
     };
-    use crate::{Cursor, RingBufferMeta, Sequence, errors::TryClaimError};
+    use crate::{errors::TryClaimError, Cursor, RingBufferMeta, Sequence};
 
     #[derive(Clone)]
     struct CursorConsumerGate {

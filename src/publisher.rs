@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::permit::SendBatch;
 use crate::{
-    RingBuffer, Sequence,
     errors::{TrySendAtMostError, TrySendError},
     sequencers::Sequencer,
+    RingBuffer, Sequence,
 };
 
 #[derive(Clone)]

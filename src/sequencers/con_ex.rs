@@ -1,8 +1,8 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{atomic::Ordering, Arc};
 
-use crate::RingBufferMeta;
 use crate::sequencers::Sequencer;
-use crate::{ConsumerSeqGate, Cursor, PublisherSeqGate, Sequence, errors::TryClaimError};
+use crate::RingBufferMeta;
+use crate::{errors::TryClaimError, ConsumerSeqGate, Cursor, PublisherSeqGate, Sequence};
 
 pub(crate) struct ExclusiveConsumerSequencer<P: PublisherSeqGate> {
     consumed: Arc<Cursor>,

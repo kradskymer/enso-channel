@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU32, Ordering, fence};
+use std::sync::atomic::{fence, AtomicU32, Ordering};
 
 use crate::{RingBufferMeta, Sequence};
 

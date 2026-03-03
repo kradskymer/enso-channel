@@ -27,7 +27,7 @@ pub trait Channel {
 
     // Try to receive exactly n items.
     fn try_recv_many(receiver: &mut Self::Receiver, items: usize)
-    -> Result<Vec<u32>, TryRecvError>;
+        -> Result<Vec<u32>, TryRecvError>;
 
     // Try to receive at most n items.
     fn try_recv_at_most(

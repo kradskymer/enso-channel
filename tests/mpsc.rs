@@ -3,7 +3,7 @@ mod harness;
 
 use harness::mpsc as h;
 use harness::shared::Channel;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 struct MpscChan;
 

@@ -23,8 +23,8 @@
 //! Run with:
 //! - `cargo bench --bench mpmc`
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
@@ -35,9 +35,9 @@ use crossbeam_utils::Backoff;
 mod bench_support;
 
 use bench_support::{
-    BurstRecorder, BurstStats, CorePinning, DEFAULT_RESULTS_DIR, OutputMode, ReportRow,
     parse_u64_env, parse_usize_env, parse_usize_list_env, resolve_output_dir,
-    spawn_timeout_watchdog, write_reports,
+    spawn_timeout_watchdog, write_reports, BurstRecorder, BurstStats, CorePinning, OutputMode,
+    ReportRow, DEFAULT_RESULTS_DIR,
 };
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;

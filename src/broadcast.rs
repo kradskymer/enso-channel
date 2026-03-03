@@ -28,10 +28,10 @@
 
 use std::sync::Arc;
 
-use crate::RingBuffer;
 use crate::sequencers::{
     FanoutConSeqGate, FanoutConsumerSequencer, MultiPubSeqGate, MultiPublisherSequencer,
 };
+use crate::RingBuffer;
 
 type PublisherSequencer<const N: usize> = MultiPublisherSequencer<FanoutConSeqGate<N>>;
 type ConsumerSequencer = FanoutConsumerSequencer<MultiPubSeqGate>;

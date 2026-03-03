@@ -37,9 +37,9 @@
 
 use std::sync::Arc;
 
-use crate::RingBuffer;
 use crate::sequencers::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
 use crate::sequencers::{MultiPubSeqGate, MultiPublisherSequencer};
+use crate::RingBuffer;
 
 type PublisherSequencer = MultiPublisherSequencer<ExclusiveConSeqGate>;
 type ConsumerSequencer = ExclusiveConsumerSequencer<MultiPubSeqGate>;

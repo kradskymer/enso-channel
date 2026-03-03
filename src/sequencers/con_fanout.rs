@@ -1,11 +1,11 @@
 use std::sync::{
-    Arc,
     atomic::{AtomicUsize, Ordering},
+    Arc,
 };
 
 use crate::{
-    ConsumerSeqGate, Cursor, PublisherSeqGate, RingBufferMeta, Sequence, errors::TryClaimError,
-    sequencers::Sequencer,
+    errors::TryClaimError, sequencers::Sequencer, ConsumerSeqGate, Cursor, PublisherSeqGate,
+    RingBufferMeta, Sequence,
 };
 
 // Removed ConsumerOps adapter

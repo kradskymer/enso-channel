@@ -27,11 +27,11 @@
 
 use std::sync::Arc;
 
-use crate::RingBuffer;
 use crate::sequencers::{
     MultiPubSeqGate, MultiPublisherSequencer, QueuedConSeqGate, QueuedConsumerSequencer,
     QueuedConsumerWiring,
 };
+use crate::RingBuffer;
 
 type PublisherSequencer = MultiPublisherSequencer<QueuedConSeqGate>;
 type ConsumerSequencer = QueuedConsumerSequencer<MultiPubSeqGate>;

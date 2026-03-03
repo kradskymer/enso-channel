@@ -1,10 +1,10 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{atomic::Ordering, Arc};
 
 use crate::sequencers::{ConsumerSeqGate, PublisherSeqGate, Sequencer};
 use crate::{
-    Cursor, RingBufferMeta, Sequence,
     errors::TryClaimError,
     slot_states::{SlotStateGroup, U32SlotStates},
+    Cursor, RingBufferMeta, Sequence,
 };
 
 /// Multi-consumer work-queue consumer sequencer.

@@ -4,7 +4,7 @@ mod harness;
 use harness::contracts::InduceUncommittedClaim;
 use harness::mpmc as hm;
 use harness::shared::Channel;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 struct MpmcChan;
 
