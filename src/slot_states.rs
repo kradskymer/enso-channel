@@ -23,6 +23,31 @@ pub(crate) trait SlotStateGroup: Send + Sync {
     fn scan_available_until(&self, start: Sequence, end: Sequence) -> Sequence;
 }
 
+/// Per-slot state tracking using `u32` lap flags.
+///
+/// ## Invariant: bounded lag prevents lap-wrap ambiguity
+///
+/// This implementation stores an `AtomicU32` per slot to record a *lap flag* derived from the
+/// absolute sequence number:
+///
+/// - The slot index is computed from the low bits of the sequence.
+/// - The stored flag is derived from the lap counter (sequence >> log2(capacity)), stored as a
+///   `u32` (with wrapping arithmetic).
+///
+/// A natural question is whether `u32` wrap-around could cause false positives (treating a slot
+/// from an old lap as available in a new lap). In this crate, such a collision is unobservable
+/// under the core ring-buffer invariant:
+///
+/// - Publishers/consumers never advance more than one full ring ahead of the opposing side for a
+///   given slot index. Equivalently, there is a bounded lag between the “slowest” and “fastest”
+///   cursor so that at any time, for each slot index, only one relevant lap is in-flight.
+///
+/// Reaching a `u32` lap collision for the same slot index would require the producer to advance by
+/// $2^{32}$ laps without the opposing side advancing enough to keep the slot “in-flight” bounded,
+/// which violates the backpressure/claim protocol enforced by the sequencers.
+///
+/// This is why the lap flag is safe even on long-running systems: the protocol prevents the state
+/// machine from ever having to distinguish between laps separated by $2^{32}$ for the same slot.
 pub(crate) struct U32SlotStates {
     states: Box<[AtomicU32]>,
     index_shift: i64,
