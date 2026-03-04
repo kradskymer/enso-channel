@@ -2,7 +2,7 @@
 name = "enso-channel"
 version = "0.1.0"
 edition = "2021"
-authors = ["ksm"]
+authors = ["ksm <kradskymer@outlook.com>"]
 license = "MIT OR Apache-2.0"
 description = "Batch-first, bounded, lock-free ring-buffer channels (MPSC/MPMC/Broadcast) for bursty, latency-sensitive systems"
 repository = "https://github.com/ksm/enso-channel"
