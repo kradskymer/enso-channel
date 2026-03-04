@@ -28,6 +28,15 @@ macro_rules! channel_define_sender {
 			///
 			/// The returned batch commits automatically on drop.
 			///
+			/// # Contract
+			///
+			/// - If the batch is dropped before all items are written, the remaining slots are
+			///   filled by repeatedly calling `factory`, and those factory-produced values are
+			///   published as if the user wrote them.
+			/// - `factory` must not panic. If it panics (including during drop), the claimed
+			///   range may never be committed/published, which can permanently reduce capacity
+			///   or wedge progress.
+			///
 			/// # Panics
 			///
 			/// Panics if `n == 0`.
@@ -44,6 +53,14 @@ macro_rules! channel_define_sender {
 			}
 
 			/// Attempts to claim a contiguous range of `n` slots using `T::default()` as the fill factory.
+			///
+			/// # Contract
+			///
+			/// - If the batch is dropped before all items are written, the remaining slots are
+			///   filled by repeatedly calling `T::default()`, and those values are published.
+			/// - `T::default()` must not panic. If it panics (including during drop), the claimed
+			///   range may never be committed/published, which can permanently reduce capacity
+			///   or wedge progress.
 			///
 			/// # Panics
 			///
@@ -64,6 +81,15 @@ macro_rules! channel_define_sender {
 			/// Returns a batch with the actually claimed slots (1..=limit).
 			/// Returns `Full` if zero slots are available.
 			///
+			/// # Contract
+			///
+			/// - If the batch is dropped before all items are written, the remaining slots are
+			///   filled by repeatedly calling `factory`, and those factory-produced values are
+			///   published as if the user wrote them.
+			/// - `factory` must not panic. If it panics (including during drop), the claimed
+			///   range may never be committed/published, which can permanently reduce capacity
+			///   or wedge progress.
+			///
 			/// # Panics
 			///
 			/// Panics if `limit == 0`.
@@ -80,6 +106,14 @@ macro_rules! channel_define_sender {
 			}
 
 			/// Attempts to send up to `limit` items using `T::default()` as the fill factory.
+			///
+			/// # Contract
+			///
+			/// - If the batch is dropped before all items are written, the remaining slots are
+			///   filled by repeatedly calling `T::default()`, and those values are published.
+			/// - `T::default()` must not panic. If it panics (including during drop), the claimed
+			///   range may never be committed/published, which can permanently reduce capacity
+			///   or wedge progress.
 			///
 			/// # Panics
 			///
@@ -120,6 +154,15 @@ macro_rules! channel_define_sender {
 			///
 			/// The returned batch commits automatically on drop.
 			///
+			/// # Contract
+			///
+			/// - If the batch is dropped before all items are written, the remaining slots are
+			///   filled by repeatedly calling `factory`, and those factory-produced values are
+			///   published as if the user wrote them.
+			/// - `factory` must not panic. If it panics (including during drop), the claimed
+			///   range may never be committed/published, which can permanently reduce capacity
+			///   or wedge progress.
+			///
 			/// # Panics
 			///
 			/// Panics if `n == 0`.
@@ -136,6 +179,14 @@ macro_rules! channel_define_sender {
 			}
 
 			/// Attempts to claim a contiguous range of `n` slots using `T::default()` as the fill factory.
+			///
+			/// # Contract
+			///
+			/// - If the batch is dropped before all items are written, the remaining slots are
+			///   filled by repeatedly calling `T::default()`, and those values are published.
+			/// - `T::default()` must not panic. If it panics (including during drop), the claimed
+			///   range may never be committed/published, which can permanently reduce capacity
+			///   or wedge progress.
 			///
 			/// # Panics
 			///
@@ -156,6 +207,15 @@ macro_rules! channel_define_sender {
 			/// Returns a batch with the actually claimed slots (1..=limit).
 			/// Returns `Full` if zero slots are available.
 			///
+			/// # Contract
+			///
+			/// - If the batch is dropped before all items are written, the remaining slots are
+			///   filled by repeatedly calling `factory`, and those factory-produced values are
+			///   published as if the user wrote them.
+			/// - `factory` must not panic. If it panics (including during drop), the claimed
+			///   range may never be committed/published, which can permanently reduce capacity
+			///   or wedge progress.
+			///
 			/// # Panics
 			///
 			/// Panics if `limit == 0`.
@@ -172,6 +232,14 @@ macro_rules! channel_define_sender {
 			}
 
 			/// Attempts to send up to `limit` items using `T::default()` as the fill factory.
+			///
+			/// # Contract
+			///
+			/// - If the batch is dropped before all items are written, the remaining slots are
+			///   filled by repeatedly calling `T::default()`, and those values are published.
+			/// - `T::default()` must not panic. If it panics (including during drop), the claimed
+			///   range may never be committed/published, which can permanently reduce capacity
+			///   or wedge progress.
 			///
 			/// # Panics
 			///
@@ -208,7 +276,11 @@ macro_rules! channel_define_receiver {
 		impl<T> $name<T> {
 			/// Attempts to receive a single item.
 			///
-			/// The returned guard commits the consumed sequence on drop.
+			/// The returned guard commits consumption on drop.
+			///
+			/// # Important
+			///
+			/// Dropping the guard marks the item as consumed.
 			pub fn try_recv(&mut self) -> Result<$recv_guard<'_, T>, $crate::errors::TryRecvError> {
 				let inner = self.inner.try_recv()?;
 				Ok($recv_guard { inner })
@@ -217,6 +289,11 @@ macro_rules! channel_define_receiver {
 			/// Attempts to receive up to `n` items.
 			///
 			/// The returned batch commits the consumed range on drop.
+			///
+			/// # Important
+			///
+			/// Dropping the batch commits the *entire* range, even if you did not iterate it.
+			/// Any unread items in the batch are skipped (considered consumed).
 			///
 			/// # Panics
 			///
@@ -253,8 +330,18 @@ macro_rules! channel_define_send_batch {
 	) => {
 		/// A guard representing an already-claimed contiguous range of slots.
 		///
-		/// Dropping this guard commits the whole range (after filling remaining slots
-		/// using the factory provided to `try_send_many*` / `try_send_at_most*`).
+		/// Dropping this guard commits the whole range.
+		///
+		/// # Important
+		///
+		/// If the batch is dropped before all items are written, the remaining slots are
+		/// filled by repeatedly calling the `factory` provided to `try_send_many*` /
+		/// `try_send_at_most*` and those factory-produced values are published.
+		///
+		/// `factory` must not panic. A panic while filling (including during drop) can
+		/// leave the claimed range uncommitted and may permanently reduce capacity or
+		/// wedge progress.
+		#[must_use = "SendBatch is a publish-on-drop guard; dropping it publishes any unwritten slots filled via the factory. Write the full batch and call finish() when ready."]
 		$vis struct $name<$lt, T, F>
 		where
 			F: Fn() -> T + Copy,
@@ -331,8 +418,18 @@ macro_rules! channel_define_send_batch {
 	) => {
 		/// A guard representing an already-claimed contiguous range of slots.
 		///
-		/// Dropping this guard commits the whole range (after filling remaining slots
-		/// using the factory provided to `try_send_many*` / `try_send_at_most*`).
+		/// Dropping this guard commits the whole range.
+		///
+		/// # Important
+		///
+		/// If the batch is dropped before all items are written, the remaining slots are
+		/// filled by repeatedly calling the `factory` provided to `try_send_many*` /
+		/// `try_send_at_most*` and those factory-produced values are published.
+		///
+		/// `factory` must not panic. A panic while filling (including during drop) can
+		/// leave the claimed range uncommitted and may permanently reduce capacity or
+		/// wedge progress.
+		#[must_use = "SendBatch is a publish-on-drop guard; dropping it publishes any unwritten slots filled via the factory. Write the full batch and call finish() when ready."]
 		$vis struct $name<$lt, T, F, const $n: usize>
 		where
 			F: Fn() -> T + Copy,
@@ -416,8 +513,11 @@ macro_rules! channel_define_recv_guard {
 		///
 		/// Dereferences to `&T`.
 		///
+		/// Dropping the guard commits consumption of the item.
+		///
 		/// Holding the guard delays committing consumption, which can in turn delay slot reuse
 		/// and apply backpressure to the channel.
+		#[must_use = "RecvGuard commits consumption on drop; keep it alive while using the referenced item."]
 		$vis struct $name<$lt, T> {
 			inner: $crate::consumers::ReadGuard<$lt, $consumer_sequencer, T>,
 		}
@@ -442,7 +542,13 @@ macro_rules! channel_define_recv_iter {
 		///
 		/// This guard commits the full claimed range on drop.
 		///
+		/// # Important
+		///
+		/// Dropping this guard commits the *entire* claimed range, even if you never called
+		/// [`Self::iter`]. Any unread items in the batch are skipped (considered consumed).
+		///
 		/// Use [`Self::iter`] to iterate over `&T` safely.
+		#[must_use = "RecvIter commits the whole batch on drop; iterate it before dropping if you need the items."]
 		$vis struct $name<$lt, T> {
 			inner: $crate::consumers::ReadBatch<$lt, $consumer_sequencer, T>,
 		}

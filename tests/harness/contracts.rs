@@ -5,7 +5,7 @@
 
 use enso_channel::errors::{TryRecvAtMostError, TryRecvError, TrySendAtMostError, TrySendError};
 
-use super::shared::{Channel, RecvBatchU32};
+use super::shared::{Channel, RecvBatchU32, SendBatchU32};
 
 /// Test-only capability: induce a state where a publisher has successfully *claimed*
 /// a range but failed to *publish/commit* it.
@@ -302,6 +302,32 @@ pub fn contract_claim_exceeds_capacity<C: Channel>() {
         .expect("recv should fit the capacity")
         .len();
     assert_eq!(actual_recv, capacity, "should recv up to capacity");
+}
+
+// ============================================================================
+// Batch send guard contracts (SendBatch + publish-on-drop)
+// ============================================================================
+
+/// Contract: dropping a partially-written send batch publishes factory-filled values.
+///
+/// This is intentionally a *loud* behavior: unwritten items are not discarded; they are
+/// produced by the factory and published.
+pub fn contract_send_batch_drop_fills_with_factory_and_commits<C: Channel>() {
+    fn factory() -> u32 {
+        9
+    }
+
+    let (mut tx, mut rx) = C::channel(8);
+
+    let mut batch = C::try_send_many_batch(&mut tx, 4, factory).expect("claim should succeed");
+    assert_eq!(batch.capacity(), 4);
+
+    batch.write_next(1);
+    batch.write_next(2);
+    drop(batch);
+
+    let got = C::try_recv_many(&mut rx, 4).expect("recv should observe committed range");
+    assert_eq!(got, vec![1, 2, 9, 9]);
 }
 
 // ============================================================================

@@ -3,7 +3,7 @@ mod harness;
 
 use harness::broadcast as h;
 use harness::contracts::InduceUncommittedSend;
-use harness::shared::{Channel, RecvBatchU32};
+use harness::shared::{Channel, RecvBatchU32, SendBatchU32};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 struct BroadcastFanout2;
@@ -43,6 +43,11 @@ impl Channel for BroadcastContractChan {
     where
         Self::Receiver: 'a;
 
+    type SendBatch<'a>
+        = enso_channel::broadcast::SendBatch<'a, u32, fn() -> u32, 2>
+    where
+        Self::Sender: 'a;
+
     fn channel(capacity: usize) -> (Self::Sender, Self::Receiver) {
         let (tx, rxs) = enso_channel::broadcast::channel::<u32, 2>(capacity);
         let [rx0, rx1] = rxs;
@@ -55,6 +60,14 @@ impl Channel for BroadcastContractChan {
         item: u32,
     ) -> Result<(), enso_channel::errors::TrySendError> {
         sender.try_send(item)
+    }
+
+    fn try_send_many_batch<'a>(
+        sender: &'a mut Self::Sender,
+        n: usize,
+        factory: fn() -> u32,
+    ) -> Result<Self::SendBatch<'a>, enso_channel::errors::TrySendError> {
+        sender.try_send_many(n, factory)
     }
 
     fn try_recv(receiver: &mut Self::Receiver) -> Result<u32, enso_channel::errors::TryRecvError> {
@@ -123,12 +136,27 @@ impl<'a> RecvBatchU32 for enso_channel::broadcast::RecvIter<'a, u32> {
     }
 }
 
+impl<'a> SendBatchU32 for enso_channel::broadcast::SendBatch<'a, u32, fn() -> u32, 2> {
+    fn capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    fn write_next(&mut self, item: u32) {
+        self.write_next(item)
+    }
+
+    fn finish(self) {
+        enso_channel::broadcast::SendBatch::finish(self)
+    }
+}
+
 generate_contract_tests_prefixed!(
     broadcast,
     BroadcastContractChan,
     [
         contract_fifo_order,
         contract_capacity_backpressure,
+        contract_send_batch_drop_fills_with_factory_and_commits,
         contract_recv_empty,
         contract_recv_many_batch_iter_yields_fifo,
         contract_recv_batch_holds_capacity_until_commit,

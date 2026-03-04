@@ -17,9 +17,24 @@ pub trait Channel {
     where
         Self::Receiver: 'a;
 
+    /// The batch guard type returned by `try_send_many_batch`.
+    ///
+    /// This is only used by contract tests that need to validate send-batch semantics
+    /// (e.g. publish-on-drop fill behavior).
+    type SendBatch<'a>: SendBatchU32
+    where
+        Self::Sender: 'a;
+
     fn channel(capacity: usize) -> (Self::Sender, Self::Receiver);
 
     fn try_send(sender: &mut Self::Sender, item: u32) -> Result<(), TrySendError>;
+
+    /// Try to claim exactly `n` slots, returning a send batch guard on success.
+    fn try_send_many_batch<'a>(
+        sender: &'a mut Self::Sender,
+        n: usize,
+        factory: fn() -> u32,
+    ) -> Result<Self::SendBatch<'a>, TrySendError>;
 
     // Try to send n items from the provided slice and n == items.len()
     fn try_send_many(sender: &mut Self::Sender, items: &[u32]) -> Result<(), TrySendError>;
@@ -67,5 +82,14 @@ pub trait RecvBatchU32 {
     fn to_vec(&self) -> Vec<u32>;
 
     /// Commit the batch immediately (equivalent to dropping it).
+    fn finish(self);
+}
+
+/// Test-only helper for working with the public `try_send_*` batch guard types.
+///
+/// The production API has a richer surface; in tests we only need a minimal subset.
+pub trait SendBatchU32 {
+    fn capacity(&self) -> usize;
+    fn write_next(&mut self, item: u32);
     fn finish(self);
 }

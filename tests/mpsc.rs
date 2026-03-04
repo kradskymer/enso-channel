@@ -2,7 +2,7 @@
 mod harness;
 
 use harness::mpsc as h;
-use harness::shared::{Channel, RecvBatchU32};
+use harness::shared::{Channel, RecvBatchU32, SendBatchU32};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 struct MpscChan;
@@ -16,6 +16,11 @@ impl Channel for MpscChan {
     where
         Self::Receiver: 'a;
 
+    type SendBatch<'a>
+        = enso_channel::mpsc::SendBatch<'a, u32, fn() -> u32>
+    where
+        Self::Sender: 'a;
+
     fn channel(capacity: usize) -> (Self::Sender, Self::Receiver) {
         enso_channel::mpsc::channel::<u32>(capacity)
     }
@@ -25,6 +30,14 @@ impl Channel for MpscChan {
         item: u32,
     ) -> Result<(), enso_channel::errors::TrySendError> {
         sender.try_send(item)
+    }
+
+    fn try_send_many_batch<'a>(
+        sender: &'a mut Self::Sender,
+        n: usize,
+        factory: fn() -> u32,
+    ) -> Result<Self::SendBatch<'a>, enso_channel::errors::TrySendError> {
+        sender.try_send_many(n, factory)
     }
 
     fn try_recv(receiver: &mut Self::Receiver) -> Result<u32, enso_channel::errors::TryRecvError> {
@@ -111,6 +124,20 @@ impl<'a> RecvBatchU32 for enso_channel::mpsc::RecvIter<'a, u32> {
     }
 }
 
+impl<'a> SendBatchU32 for enso_channel::mpsc::SendBatch<'a, u32, fn() -> u32> {
+    fn capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    fn write_next(&mut self, item: u32) {
+        self.write_next(item)
+    }
+
+    fn finish(self) {
+        enso_channel::mpsc::SendBatch::finish(self)
+    }
+}
+
 // ============================================================================
 // Contract tests via macro
 // ============================================================================
@@ -121,6 +148,7 @@ generate_contract_tests_prefixed!(
     [
         contract_fifo_order,
         contract_capacity_backpressure,
+        contract_send_batch_drop_fills_with_factory_and_commits,
         contract_recv_empty,
         contract_recv_many_batch_iter_yields_fifo,
         contract_recv_batch_holds_capacity_until_commit,
