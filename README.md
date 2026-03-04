@@ -360,6 +360,24 @@ and the burst is complete when **all** consumers have received it.
 - Memory ordering documented in source
 - Loom integration planned / in progress
 
+### Contracts (panic + RAII guards)
+
+`enso-channel` is a **lock-free primitive** optimized for fast-path performance.
+It intentionally does **not** impose a heavyweight orchestration layer (parking/blocking/spinning,
+panic recovery, strict state reconciliation) on every operation.
+
+As a result, some behaviors are **caller contracts**:
+
+- **Send batch factories must not panic.** `try_send_many*` / `try_send_at_most*` use a factory
+    to fill any unwritten slots when a send batch is finished or dropped. If that factory panics
+    (including during drop), the claimed range may remain uncommitted and can wedge progress or
+    permanently reduce capacity.
+- **Receive guards commit on drop.** Dropping a receive batch commits the full claimed range.
+    If you drop it without iterating, unread items are skipped (considered consumed).
+
+If you need stronger “panic containment” or recovery behavior, build it *on top* of this primitive
+in your orchestration layer.
+
 > **Lock-free correctness and memory ordering are treated as first-class concerns.**
 
 ---
