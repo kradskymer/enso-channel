@@ -2,7 +2,7 @@
 
 # enso-channel
 
-<img src="enso_channel_logo.png" alt="enso-channel logo" height="300" width="300">
+<img src="https://raw.githubusercontent.com/kradskymer/enso-channel/refs/heads/main/enso_channel_logo.png" alt="enso-channel logo" height="300" width="300">
 
 ### **Bounded. Lock-free. Batch-native.**
 
