@@ -133,12 +133,6 @@ pub(crate) trait ConsumerSeqGate {
     /// - `Sequence::SHUTDOWN_OPEN` => consumer side is disconnected.
     /// - any other value => valid max-consumed cursor.
     fn max_consumed(&self, next_seq: Sequence, end_seq: Sequence) -> Sequence;
-
-    /// Returns true if the consumer side is disconnected.
-    ///
-    /// This is intended to be a constant-time check used by publisher fast-paths
-    /// to avoid claiming/publishing after all consumers are dropped.
-    fn is_disconnected(&self) -> bool;
 }
 
 #[cfg(test)]
@@ -162,10 +156,6 @@ mod tests {
     impl ConsumerSeqGate for CursorConsumerGate {
         fn max_consumed(&self, _next_seq: Sequence, _end_seq: Sequence) -> Sequence {
             self.consumed.load(Ordering::Acquire).into()
-        }
-
-        fn is_disconnected(&self) -> bool {
-            self.consumed.load(Ordering::Acquire) == Sequence::SHUTDOWN_OPEN.value()
         }
     }
 

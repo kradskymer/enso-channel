@@ -85,12 +85,16 @@ impl<C: ConsumerSeqGate> MultiPublisherSequencer<C> {
         loop {
             let highest_to_publish = last_claimed + n;
             let start_seq = last_claimed + 1;
+            let max_consumed = self
+                .consumer_gate
+                .max_consumed(start_seq, highest_to_publish);
+            if max_consumed.is_shutdown_open() {
+                return Err(TryClaimError::Shutdown);
+            }
+            let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
+            self.max_available = last_claimed + available_capacity;
 
             if highest_to_publish <= self.max_available {
-                if self.consumer_gate.is_disconnected() {
-                    return Err(TryClaimError::Shutdown);
-                }
-
                 let expected = last_claimed.value();
                 match self.shared_state.claimed.compare_exchange(
                     expected,
@@ -107,18 +111,7 @@ impl<C: ConsumerSeqGate> MultiPublisherSequencer<C> {
                         continue;
                     }
                 }
-            }
-
-            let max_consumed = self
-                .consumer_gate
-                .max_consumed(start_seq, highest_to_publish);
-            if max_consumed.is_shutdown_open() {
-                return Err(TryClaimError::Shutdown);
-            }
-
-            let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
-            self.max_available = last_claimed + available_capacity;
-            if available_capacity < n {
+            } else {
                 return Err(TryClaimError::Insufficient {
                     missing: n - available_capacity,
                 });
@@ -164,25 +157,19 @@ impl<C: ConsumerSeqGate> Sequencer for MultiPublisherSequencer<C> {
             let highest_to_publish = last_claimed + n;
             let start_seq = last_claimed + 1;
 
-            if highest_to_publish > self.max_available {
-                let max_consumed = self
-                    .consumer_gate
-                    .max_consumed(start_seq, highest_to_publish);
-                if max_consumed.is_shutdown_open() {
-                    return Err(TryClaimError::Shutdown);
-                }
-
-                let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
-                self.max_available = last_claimed + available_capacity;
+            let max_consumed = self
+                .consumer_gate
+                .max_consumed(start_seq, highest_to_publish);
+            if max_consumed.is_shutdown_open() {
+                return Err(TryClaimError::Shutdown);
             }
+
+            let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
+            self.max_available = last_claimed + available_capacity;
 
             // None available
             if start_seq > self.max_available {
                 return Err(TryClaimError::Empty);
-            }
-
-            if self.consumer_gate.is_disconnected() {
-                return Err(TryClaimError::Shutdown);
             }
 
             let available = (self.max_available.value() - last_claimed.value()).min(n);

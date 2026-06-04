@@ -157,9 +157,4 @@ impl ConsumerSeqGate for ExclusiveConSeqGate {
     fn max_consumed(&self, _next_seq: crate::Sequence, _end_seq: crate::Sequence) -> Sequence {
         Sequence::new(self.consumed.load(Ordering::Acquire))
     }
-
-    #[inline]
-    fn is_disconnected(&self) -> bool {
-        Sequence::new(self.consumed.load(Ordering::Acquire)).is_shutdown_open()
-    }
 }

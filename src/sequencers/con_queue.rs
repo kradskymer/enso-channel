@@ -281,9 +281,4 @@ impl ConsumerSeqGate for QueuedConSeqGate {
         self.consumed_states
             .scan_available_until(prev_start, prev_end)
     }
-
-    #[inline]
-    fn is_disconnected(&self) -> bool {
-        self.claimed.load(Ordering::Acquire) == Sequence::SHUTDOWN_OPEN.value()
-    }
 }

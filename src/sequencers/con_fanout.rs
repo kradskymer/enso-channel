@@ -161,34 +161,12 @@ impl<const N: usize> FanoutConSeqGate<N> {
 
 impl<const N: usize> ConsumerSeqGate for FanoutConSeqGate<N> {
     fn max_consumed(&self, _next_seq: Sequence, _end_seq: Sequence) -> Sequence {
-        if self.connected.load(Ordering::Acquire) == 0 {
-            return Sequence::SHUTDOWN_OPEN;
-        }
-
-        let mut min_consumed: Option<Sequence> = None;
+        let mut min_consumed = Sequence::SHUTDOWN_OPEN;
         for i in 0..N {
             let value = self.consumed[i].load(Ordering::Acquire);
             let seq = Sequence::new(value);
-            if seq.is_shutdown_open() {
-                // Consumer has been dropped; it must not gate the publisher.
-                continue;
-            }
-            min_consumed = Some(match min_consumed {
-                Some(current) => current.min(seq),
-                None => seq,
-            });
+            min_consumed = min_consumed.min(seq);
         }
-
-        let Some(min_consumed) = min_consumed else {
-            // All consumers have been dropped; publishers must observe a disconnected state.
-            return Sequence::SHUTDOWN_OPEN;
-        };
-
         min_consumed
-    }
-
-    #[inline]
-    fn is_disconnected(&self) -> bool {
-        self.connected.load(Ordering::Acquire) == 0
     }
 }
