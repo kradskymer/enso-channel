@@ -219,11 +219,15 @@ where
 /// send before dropping the receiver to ensure cached fast-paths still observe
 /// disconnect immediately.
 pub fn contract_consumer_drop_disconnects_publishers<C: Channel>() {
-    let (mut tx, rx) = C::channel(8);
+    let (mut tx, mut rx) = C::channel(8);
 
     // Warm any internal publisher availability caches.
     C::try_send(&mut tx, 0).expect("warm-up send should succeed");
 
+    let val = C::try_recv(&mut rx).expect("should not panic");
+    assert_eq!(val, 0);
+
+    assert!(C::try_send_many(&mut tx, &[1, 2, 3]).is_ok());
     // Drop the last receiver
     drop(rx);
 

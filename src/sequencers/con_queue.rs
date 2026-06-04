@@ -3,7 +3,7 @@ use std::sync::{atomic::Ordering, Arc};
 use crate::sequencers::{ConsumerSeqGate, PublisherSeqGate, Sequencer};
 use crate::{
     errors::TryClaimError,
-    slot_states::{SlotStateGroup, U32SlotStates},
+    slot_states::{SlotState, SlotStateGroup, U32SlotStates},
     Cursor, RingBufferMeta, Sequence,
 };
 
@@ -25,6 +25,7 @@ struct QueuedSharedState {
     claimed: Arc<Cursor>,
     /// Per-slot consumed/available flags (commit path).
     consumed_states: Arc<U32SlotStates>,
+    buffer_size: i64,
 }
 
 /// Wiring helper for work-queue consumer topology.
@@ -58,16 +59,22 @@ impl QueuedSharedState {
         Self {
             claimed: Arc::new(Cursor::INIT),
             consumed_states: Arc::new(U32SlotStates::new_all_available(ring_meta)),
+            buffer_size: ring_meta.buffer_size(),
         }
     }
 }
 
 impl Drop for QueuedSharedState {
     fn drop(&mut self) {
-        // Encode consumer disconnect for publishers via the claimed cursor sentinel.
-        // After disconnect, publishers must stop producing.
-        self.claimed
-            .store(Sequence::SHUTDOWN_OPEN.value(), Ordering::Release);
+        // Publishers scan the *previous* lap in `max_consumed`
+        // (prev_seq = next_seq - capacity), so a single-slot shutdown marker
+        // is invisible if the publisher's query lands on a different slot
+        // index.  Mark every slot to guarantee any scan detects the
+        // disconnect.  O(capacity) is acceptable — this is the cold drop path
+        // of the last consumer.
+        for i in 0..(self.buffer_size as usize) {
+            self.consumed_states.mark_shutdown_at_index(i);
+        }
     }
 }
 
@@ -92,17 +99,17 @@ impl<P: PublisherSeqGate> QueuedConsumerSequencer<P> {
             let next_claim = last_claimed + 1;
 
             if highest_to_claim > self.max_published {
-                let max_published = self
+                let state = self
                     .publisher_gate
                     .max_published(next_claim, highest_to_claim);
+                let max_published = state.sequence();
                 if max_published > self.max_published {
                     self.max_published = max_published;
                 }
                 if max_published < highest_to_claim {
-                    let shutdown_sequence = self.publisher_gate.shutdown_sequence();
-                    if !shutdown_sequence.is_shutdown_open() {
+                    if state.is_shutdown() {
                         // Producer has shutdown. Check if we've consumed all available data.
-                        if last_claimed >= shutdown_sequence {
+                        if last_claimed >= max_published {
                             // All data drained, safe to disconnect
                             return Err(TryClaimError::Shutdown);
                         }
@@ -148,10 +155,10 @@ impl<P: PublisherSeqGate> Sequencer for QueuedConsumerSequencer<P> {
 
             // update max_published cached value
             if highest_to_consume > self.max_published {
-                let max_published = self
+                let state = self
                     .publisher_gate
                     .max_published(start_seq, highest_to_consume);
-                self.max_published = max_published;
+                self.max_published = state.sequence();
             }
 
             // All requested are available
@@ -172,13 +179,18 @@ impl<P: PublisherSeqGate> Sequencer for QueuedConsumerSequencer<P> {
                 }
             }
 
-            let shutdown_sequence = self.publisher_gate.shutdown_sequence();
-            let end_seq = if !shutdown_sequence.is_shutdown_open() {
-                if last_claimed >= shutdown_sequence {
+            // Re-read max_published with shutdown awareness.
+            let state = self
+                .publisher_gate
+                .max_published(start_seq, highest_to_consume);
+            self.max_published = state.sequence();
+
+            let end_seq = if state.is_shutdown() {
+                if last_claimed >= self.max_published {
                     return Err(TryClaimError::Shutdown);
                 }
 
-                let end_seq = shutdown_sequence.min(self.max_published);
+                let end_seq = self.max_published;
                 if start_seq > end_seq {
                     return Err(TryClaimError::Empty);
                 }
@@ -229,7 +241,6 @@ impl<P: PublisherSeqGate> crate::sequencers::sealed::Sealed for QueuedConsumerSe
 #[derive(Clone)]
 pub(crate) struct QueuedConSeqGate {
     consumed_states: Arc<U32SlotStates>,
-    claimed: Arc<Cursor>,
     capacity: i64,
 }
 
@@ -237,18 +248,13 @@ impl QueuedConSeqGate {
     fn new(shared_state: Arc<QueuedSharedState>, ring_meta: RingBufferMeta) -> Self {
         Self {
             consumed_states: shared_state.consumed_states.clone(),
-            claimed: shared_state.claimed.clone(),
             capacity: ring_meta.buffer_size(),
         }
     }
 }
 
 impl ConsumerSeqGate for QueuedConSeqGate {
-    fn max_consumed(&self, next_seq: Sequence, end_seq: Sequence) -> Sequence {
-        if self.claimed.load(Ordering::Acquire) == Sequence::SHUTDOWN_OPEN.value() {
-            return Sequence::SHUTDOWN_OPEN;
-        }
-
+    fn max_consumed(&self, next_seq: Sequence, end_seq: Sequence) -> SlotState {
         // To determine if sequences [next_seq, end_seq] can be written, we need to check
         // if the previous occupants of those slots have been consumed.
         // Previous occupant of seq S is S - capacity.

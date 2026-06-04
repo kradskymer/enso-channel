@@ -80,7 +80,6 @@ fn channel_with_ring<T, const N: usize>(
     let consumed: [Arc<crate::Cursor>; N] =
         std::array::from_fn(|_| Arc::new(crate::Cursor::new(crate::Sequence::INIT)));
     let consumer_gate = Arc::new(FanoutConSeqGate::<N>::new(consumed.clone()));
-    let disconnect_counter = consumer_gate.disconnect_counter();
 
     let publisher_sequencer = PublisherSequencer::<N>::new(consumer_gate, ring_meta);
     let publisher_gate = Arc::new(publisher_sequencer.publisher_gate());
@@ -90,12 +89,8 @@ fn channel_with_ring<T, const N: usize>(
     };
 
     let receivers: [Receiver<T>; N] = std::array::from_fn(|i| {
-        let consumer_sequencer = ConsumerSequencer::new(
-            publisher_gate.clone(),
-            consumed[i].clone(),
-            disconnect_counter.clone(),
-            ring_meta,
-        );
+        let consumer_sequencer =
+            ConsumerSequencer::new(publisher_gate.clone(), consumed[i].clone(), ring_meta);
         Receiver {
             inner: Consumer::new(consumer_sequencer, ring_buffer.clone()),
         }
