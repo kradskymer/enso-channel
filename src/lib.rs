@@ -101,7 +101,6 @@
 mod channel_api_macros;
 
 pub mod broadcast;
-pub mod mpmc;
 pub mod mpsc;
 
 mod ringbuffer;
@@ -147,11 +146,5 @@ mod send_sync_tests {
     fn broadcast_is_send() {
         assert_send::<crate::broadcast::Sender<u32, 2>>();
         assert_send::<crate::broadcast::Receiver<u32>>();
-    }
-
-    #[test]
-    fn mpmc_is_send() {
-        assert_send::<crate::mpmc::Sender<u32>>();
-        assert_send::<crate::mpmc::Receiver<u32>>();
     }
 }

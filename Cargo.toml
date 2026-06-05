@@ -33,10 +33,6 @@ name = "mpsc"
 harness = false
 
 [[bench]]
-name = "mpmc"
-harness = false
-
-[[bench]]
 name = "broadcast"
 harness = false
 

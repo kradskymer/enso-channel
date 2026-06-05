@@ -3,7 +3,6 @@
 pub mod broadcast;
 pub mod concurrency;
 pub mod contracts;
-pub mod mpmc;
 pub mod mpsc;
 pub mod shared;
 

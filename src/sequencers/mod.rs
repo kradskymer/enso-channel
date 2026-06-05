@@ -30,7 +30,6 @@
 
 mod con_ex;
 mod con_fanout;
-mod con_queue;
 mod pub_mul;
 
 pub(crate) mod sealed {
@@ -39,7 +38,6 @@ pub(crate) mod sealed {
 
 pub(crate) use con_ex::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
 pub(crate) use con_fanout::{FanoutConSeqGate, FanoutConsumerSequencer};
-pub(crate) use con_queue::{QueuedConSeqGate, QueuedConsumerSequencer, QueuedConsumerWiring};
 pub(crate) use pub_mul::{MultiPubSeqGate, MultiPublisherSequencer};
 
 use crate::errors::TryClaimError;

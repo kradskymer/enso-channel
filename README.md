@@ -113,14 +113,11 @@ Unified API across multiple topologies:
 | Pattern       | Description                         |
 | ------------- | ----------------------------------- |
 | **SPSC**      | Single Producer, Single Consumer    |
-| **MPSC**      | Multiple Producers, Single Consumer |
 | **Broadcast** | Lossless Broadcast (fixed‑N fanout) |
-| **MPMC**      | Work Distribution                   |
 
 ### Key Properties
 
 - Receivers may initiate disconnect
-- MPMC receivers can be cloned
 - Broadcast topology is fixed at creation
 - Disconnection follows RAII semantics
 - All patterns support batch operations
@@ -147,8 +144,6 @@ It emerges from its **batch-native design**.
 - **Burst amortization**
 - **Producer/consumer balance**
 - **Tail latency behavior**
-
-> **Note:** Under high contention (e.g. MPMC), the effect is especially visible — but tunability is inherent to the design, not limited to one pattern.
 
 ---
 
@@ -262,14 +257,13 @@ The numbers below are a selected snapshot to illustrate burst-latency behavior.
 - The results are from a specific run on a MacBook Pro M4 (24G); your mileage may vary
 - `broadcast` measures a burst as complete when it is delivered to **all** consumers
 - These benches pin threads by default (set `ENSO_CHANNEL_PINNING=off` to disable)
-- Outputs are printed to stdout and also written as CSV + table to a local output dir (default: `benches/results`, generated and gitignored). Override with `ENSO_SPSC_OUTPUT_DIR` / `ENSO_MPSC_OUTPUT_DIR` / `ENSO_MPMC_OUTPUT_DIR` / `ENSO_BROADCAST_OUTPUT_DIR`
+- Outputs are printed to stdout and also written as CSV + table to a local output dir (default: `benches/results`, generated and gitignored). Override with `ENSO_SPSC_OUTPUT_DIR` / `ENSO_MPSC_OUTPUT_DIR` / `ENSO_BROADCAST_OUTPUT_DIR`
 
 ### To reproduce
 
 ```sh
 cargo bench --bench spsc
 cargo bench --bench mpsc
-cargo bench --bench mpmc
 cargo bench --bench broadcast
 ```
 
@@ -307,34 +301,6 @@ For additional workloads/topologies, run the other bench targets under `benches/
 | 16    |    1273.0 |       9007 |         7650.7 |           28431 |
 | 64    |    1690.1 |      11711 |        21274.8 |           49919 |
 | 128   |    2305.5 |      16295 |        35566.1 |           81663 |
-
----
-
-### Work queue / MPMC tunability (ns/burst)
-
-This bench measures **work distribution** (MPMC): total messages per burst = `burst * producers`,
-and the burst is complete when the set is consumed by the worker pool.
-
-For `enso_channel::mpmc`, we report the best `try_send_at_most` / `try_recv_at_most` tuning
-**by lowest p99.9** among the tested `(send_limit, recv_limit)` pairs.
-
-#### P2C2
-
-| burst | enso tuning (send_limit, recv_limit) | enso mean | enso p99.9 | crossbeam mean | crossbeam p99.9 |
-| ----- | -----------------------------------: | --------: | ---------: | -------------: | --------------: |
-| 1     |                              (8, 64) |    1396.8 |       3001 |         1373.5 |            3251 |
-| 16    |                              (8, 32) |    1553.1 |       2501 |         3502.0 |            9631 |
-| 32    |                              (8, 32) |    1866.0 |       3833 |         4228.3 |           13959 |
-| 64    |                              (8, 32) |    2887.7 |       6375 |         6074.2 |           19295 |
-
-#### P4C4
-
-| burst | enso tuning (send_limit, recv_limit) | enso mean | enso p99.9 | crossbeam mean | crossbeam p99.9 |
-| ----- | -----------------------------------: | --------: | ---------: | -------------: | --------------: |
-| 1     |                              (4, 32) |    1835.6 |      10295 |         2037.1 |           10591 |
-| 16    |                              (8, 64) |    2453.8 |      10215 |        11610.8 |          127679 |
-| 32    |                              (8, 32) |    4171.4 |      12463 |        15574.9 |          360703 |
-| 64    |                              (8, 64) |    7390.4 |      15503 |        20208.5 |          598527 |
 
 ---
 

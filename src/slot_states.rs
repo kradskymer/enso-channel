@@ -80,19 +80,6 @@ impl U32SlotStates {
         }
     }
 
-    pub(crate) fn new_all_available(ring_meta: RingBufferMeta) -> Self {
-        let capacity = ring_meta.buffer_size() as usize;
-        let states = (0..capacity).map(|_| AtomicU32::new(MASK)).collect();
-
-        let index_shift = capacity.trailing_zeros() as i64;
-        Self {
-            states,
-            index_shift,
-            ring_meta,
-            flag_adjustment: 0,
-        }
-    }
-
     fn slot_index(&self, seq: Sequence) -> usize {
         self.ring_meta.index_of_seq(seq)
     }
@@ -112,13 +99,6 @@ impl U32SlotStates {
     #[inline]
     pub(crate) fn mark_shutdown(&self, seq: Sequence) {
         let index = self.slot_index(seq);
-        self.states[index].fetch_or(SHUTDOWN_BIT, Ordering::Release);
-    }
-
-    /// Sets the shutdown bit on a specific slot by index (used for bulk
-    /// marking during consumer drop).
-    #[inline]
-    pub(crate) fn mark_shutdown_at_index(&self, index: usize) {
         self.states[index].fetch_or(SHUTDOWN_BIT, Ordering::Release);
     }
 
@@ -354,9 +334,5 @@ mod tests {
     // Use the macro for U32SlotStates
     generate_slot_state_tests!(U32SlotStates, "u32_new_empty", |ring| {
         U32SlotStates::new_all_empty(ring)
-    });
-
-    generate_slot_state_tests!(U32SlotStates, "u32_new_all_available", |ring| {
-        U32SlotStates::new_all_available(ring)
     });
 }
