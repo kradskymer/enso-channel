@@ -137,7 +137,6 @@ It emerges from its **batch-native design**.
 
 | API                                     | Description              |
 | --------------------------------------- | ------------------------ |
-| `try_send_many` / `try_recv_many`       | Batch claiming           |
 | `try_send_at_most` / `try_recv_at_most` | At-most semantics        |
 | Explicit backpressure                   | Surface `Full` / `Empty` |
 
@@ -179,14 +178,14 @@ fn main() {
     }
 
     // Batch send
-    let mut batch = tx.try_send_many_default(8).unwrap();
+    let mut batch = tx.try_send_at_most(8).unwrap();
     for i in 1..=8 {
         batch.write_next(i);
     }
     batch.finish();
 
     // Batch receive
-    let guard = rx.try_recv_many(8).unwrap();
+    let guard = rx.try_recv_at_most(8).unwrap();
     for v in guard.iter() {
         println!("{v}");
     }
@@ -368,7 +367,7 @@ panic recovery, strict state reconciliation) on every operation.
 
 As a result, some behaviors are **caller contracts**:
 
-- **Send batch factories must not panic.** `try_send_many*` / `try_send_at_most*` use a factory
+- **Send batch factories must not panic.** `try_send_at_most*` use a factory
     to fill any unwritten slots when a send batch is finished or dropped. If that factory panics
     (including during drop), the claimed range may remain uncommitted and can wedge progress or
     permanently reduce capacity.

@@ -20,8 +20,8 @@
 //! let (mut tx, mut rxs) = broadcast::channel::<u64, 2>(64);
 //! let [mut rx0, mut rx1] = rxs;
 //!
-//! tx.try_send(7)?;
-//! let _a = *rx0.try_recv()?;
+//! tx.try_send(7).unwrap();
+//! let _a = *rx0.try_recv().unwrap();
 //! let _b = *rx1.try_recv()?;
 //! # Ok(()) }
 //! ```

@@ -21,10 +21,10 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let (mut tx, mut rx) = mpsc::channel::<u64>(64);
 //!
-//! tx.try_send(42)?;
-//! let _v = *rx.try_recv()?;
+//! tx.try_send(42).unwrap();
+//! let _v = *rx.try_recv().unwrap();
 //!
-//! let mut batch = tx.try_send_many_default(8)?;
+//! let mut batch = tx.try_send_at_most(8, || 0)?;
 //! batch.fill_with(|| 1);
 //! batch.finish();
 //!
