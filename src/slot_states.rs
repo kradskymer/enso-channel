@@ -1,32 +1,7 @@
 use std::sync::atomic::{fence, AtomicU32, Ordering};
 
+use crate::sequencers::SlotState;
 use crate::{RingBufferMeta, Sequence};
-
-/// Combines a sequence value with a shutdown flag.
-///
-/// Returned by [`SlotStateGroup::scan_available_until`] so callers receive both
-/// the last contiguous available sequence and a shutdown signal in one call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SlotState {
-    seq: Sequence,
-    shutdown: bool,
-}
-
-impl SlotState {
-    pub(crate) fn new(seq: Sequence, shutdown: bool) -> Self {
-        Self { seq, shutdown }
-    }
-
-    #[inline]
-    pub(crate) fn sequence(self) -> Sequence {
-        self.seq
-    }
-
-    #[inline]
-    pub(crate) fn is_shutdown(self) -> bool {
-        self.shutdown
-    }
-}
 
 /// Shared abstraction for per-slot state tracking in the ring buffer.
 pub(crate) trait SlotStateGroup: Send + Sync {

@@ -1,11 +1,8 @@
 use std::sync::Arc;
 
+use crate::errors::TrySendAtMostError;
 use crate::permit::SendBatch;
-use crate::{
-    errors::{TrySendAtMostError, TrySendError},
-    sequencers::Sequencer,
-    RingBuffer, Sequence,
-};
+use crate::{errors::TrySendError, sequencers::Sequencer, RingBuffer, Sequence};
 
 #[derive(Clone)]
 pub struct Publisher<P, T> {
@@ -39,40 +36,16 @@ impl<P: Sequencer, T> Publisher<P, T> {
             .commit_range(Sequence::new(start_seq), Sequence::new(end_seq));
     }
 
-    pub fn try_publish(&mut self, item: T) -> Result<(), TrySendError> {
-        let seq = self.publisher_sequencer.try_claim()?;
-        self.write(item, seq);
-        self.publisher_sequencer.commit(seq);
-        Ok(())
-    }
-
-    pub fn try_publish_many<F>(
-        &mut self,
-        n: usize,
-        factory: F,
-    ) -> Result<SendBatch<'_, P, T, F>, TrySendError>
-    where
-        F: Fn() -> T + Copy,
-    {
-        assert!(n > 0, "n must be > 0");
-        let (start_seq, end_seq) = self.publisher_sequencer.try_claim_n(n as i64)?;
-
-        Ok(SendBatch::new(
-            &*self,
-            start_seq.value(),
-            end_seq.value(),
-            factory,
-        ))
-    }
-
-    pub fn try_publish_many_default(
-        &mut self,
-        n: usize,
-    ) -> Result<SendBatch<'_, P, T, fn() -> T>, TrySendError>
-    where
-        T: Default,
-    {
-        self.try_publish_many(n, T::default)
+    pub fn try_publish(&mut self, item: T) -> Result<(), TrySendError<T>> {
+        match self.publisher_sequencer.try_claim() {
+            Ok(seq) => {
+                self.write(item, seq);
+                self.publisher_sequencer.commit(seq);
+                Ok(())
+            }
+            Err(crate::errors::TryClaimError::Empty) => Err(TrySendError::Full(item)),
+            Err(crate::errors::TryClaimError::Shutdown) => Err(TrySendError::Disconnected(item)),
+        }
     }
 
     pub fn try_publish_at_most<F>(

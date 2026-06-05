@@ -1,4 +1,4 @@
-use enso_channel::errors::TryRecvAtMostError;
+use enso_channel::errors::TryRecvError;
 
 fn main() {
     let (mut sender, mut receiver) = enso_channel::mpsc::channel::<u64>(16);
@@ -15,10 +15,10 @@ fn main() {
                     let _ = *v;
                 }
             }
-            Err(TryRecvAtMostError::Empty) => {
+            Err(TryRecvError::Empty) => {
                 // retry/backoff/spin: caller-controlled
             }
-            Err(TryRecvAtMostError::Disconnected) => break,
+            Err(TryRecvError::Disconnected) => break,
         }
     }
 }

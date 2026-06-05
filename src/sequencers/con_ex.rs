@@ -1,7 +1,6 @@
 use std::sync::{atomic::Ordering, Arc};
 
-use crate::sequencers::Sequencer;
-use crate::slot_states::SlotState;
+use crate::sequencers::{Sequencer, SlotState};
 use crate::RingBufferMeta;
 use crate::{errors::TryClaimError, ConsumerSeqGate, Cursor, PublisherSeqGate, Sequence};
 
@@ -28,38 +27,6 @@ impl<P: PublisherSeqGate> ExclusiveConsumerSequencer<P> {
 }
 
 impl<P: PublisherSeqGate> ExclusiveConsumerSequencer<P> {
-    fn do_try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError> {
-        let last_consumed = Sequence::new(self.consumed.load(Ordering::Relaxed));
-        let highest_to_claim = last_consumed + n;
-        let next_claim = last_consumed + 1;
-
-        if highest_to_claim <= self.max_published {
-            return Ok((next_claim, highest_to_claim));
-        }
-
-        let state = self
-            .producer_gate
-            .max_published(next_claim, highest_to_claim);
-        let max_published = state.sequence();
-        if max_published > self.max_published {
-            self.max_published = max_published;
-        }
-        if state.is_shutdown() {
-            // Producer has shutdown. Check if we've consumed all available data.
-            if last_consumed >= max_published {
-                return Err(TryClaimError::Shutdown);
-            }
-        }
-
-        if max_published >= highest_to_claim {
-            return Ok((next_claim, highest_to_claim));
-        }
-
-        Err(TryClaimError::Insufficient {
-            missing: highest_to_claim.value() - max_published.value(),
-        })
-    }
-
     #[inline]
     fn do_commit(&self, seq: Sequence) {
         self.consumed.store(seq.value(), Ordering::Release);
@@ -72,12 +39,8 @@ impl<P: PublisherSeqGate> ExclusiveConsumerSequencer<P> {
 }
 
 impl<P: PublisherSeqGate> Sequencer for ExclusiveConsumerSequencer<P> {
-    fn try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError> {
-        self.do_try_claim_n(n)
-    }
-
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
-        self.do_try_claim_n(1).map(|(_, end_seq)| end_seq)
+        self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
     }
 
     fn try_claim_at_most(&mut self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError> {

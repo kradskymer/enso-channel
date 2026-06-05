@@ -1,9 +1,9 @@
 use std::sync::{atomic::Ordering, Arc};
 
-use crate::sequencers::{ConsumerSeqGate, PublisherSeqGate, Sequencer};
+use crate::sequencers::{ConsumerSeqGate, PublisherSeqGate, Sequencer, SlotState};
 use crate::{
     errors::TryClaimError,
-    slot_states::{SlotState, SlotStateGroup, U32SlotStates},
+    slot_states::{SlotStateGroup, U32SlotStates},
     Cursor, RingBufferMeta, Sequence,
 };
 
@@ -91,59 +91,11 @@ impl<P: PublisherSeqGate> QueuedConsumerSequencer<P> {
             ring_meta,
         }
     }
-
-    fn do_try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError> {
-        let mut last_claimed = Sequence::new(self.shared_state.claimed.load(Ordering::Relaxed));
-        loop {
-            let highest_to_claim = last_claimed + n;
-            let next_claim = last_claimed + 1;
-
-            if highest_to_claim > self.max_published {
-                let state = self
-                    .publisher_gate
-                    .max_published(next_claim, highest_to_claim);
-                let max_published = state.sequence();
-                if max_published > self.max_published {
-                    self.max_published = max_published;
-                }
-                if max_published < highest_to_claim {
-                    if state.is_shutdown() {
-                        // Producer has shutdown. Check if we've consumed all available data.
-                        if last_claimed >= max_published {
-                            // All data drained, safe to disconnect
-                            return Err(TryClaimError::Shutdown);
-                        }
-                        // Still have data to consume, return Insufficient to allow draining
-                    }
-
-                    return Err(TryClaimError::Insufficient {
-                        missing: highest_to_claim.value() - max_published.value(),
-                    });
-                }
-            }
-
-            match self.shared_state.claimed.compare_exchange(
-                last_claimed.value(),
-                highest_to_claim.value(),
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Ok((next_claim, highest_to_claim)),
-                Err(observed) => {
-                    last_claimed = Sequence::new(observed);
-                }
-            }
-        }
-    }
 }
 
 impl<P: PublisherSeqGate> Sequencer for QueuedConsumerSequencer<P> {
-    fn try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError> {
-        self.do_try_claim_n(n)
-    }
-
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
-        self.do_try_claim_n(1).map(|(_, end_seq)| end_seq)
+        self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
     }
 
     fn try_claim_at_most(&mut self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError> {

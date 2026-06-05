@@ -81,7 +81,7 @@ pub fn consumer_drop_disconnects_producers<C: MpmcChannel>() {
     drop(rx);
 
     match C::try_send(&mut tx, 1) {
-        Err(TrySendError::Disconnected) => {}
+        Err(TrySendError::Disconnected(_)) => {}
         other => panic!("expected Disconnected, got {other:?}"),
     }
 }

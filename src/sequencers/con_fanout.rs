@@ -1,8 +1,9 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use crate::{
-    errors::TryClaimError, sequencers::Sequencer, slot_states::SlotState, ConsumerSeqGate, Cursor,
-    PublisherSeqGate, RingBufferMeta, Sequence,
+    errors::TryClaimError,
+    sequencers::{Sequencer, SlotState},
+    ConsumerSeqGate, Cursor, PublisherSeqGate, RingBufferMeta, Sequence,
 };
 
 // Removed ConsumerOps adapter
@@ -26,41 +27,8 @@ impl<P: PublisherSeqGate> FanoutConsumerSequencer<P> {
 }
 
 impl<P: PublisherSeqGate> Sequencer for FanoutConsumerSequencer<P> {
-    fn try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError> {
-        let last_consumed = Sequence::new(self.consumed.load(Ordering::Relaxed));
-        let highest_to_claim = last_consumed + n;
-        let next_claim = last_consumed + 1;
-
-        if highest_to_claim <= self.max_published {
-            return Ok((next_claim, highest_to_claim));
-        }
-
-        let start_seq = last_consumed + 1;
-        let state = self
-            .producer_gate
-            .max_published(start_seq, highest_to_claim);
-        let max_published = state.sequence();
-        if max_published > self.max_published {
-            self.max_published = max_published;
-        }
-        if state.is_shutdown() {
-            // Producer has shutdown. Check if we've consumed all available data.
-            if last_consumed >= max_published {
-                return Err(TryClaimError::Shutdown);
-            }
-        }
-
-        if max_published >= highest_to_claim {
-            return Ok((next_claim, highest_to_claim));
-        }
-
-        Err(TryClaimError::Insufficient {
-            missing: highest_to_claim.value() - max_published.value(),
-        })
-    }
-
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
-        Sequencer::try_claim_n(self, 1).map(|(_, end_seq)| end_seq)
+        self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
     }
 
     fn try_claim_at_most(&mut self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError> {

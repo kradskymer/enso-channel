@@ -1,7 +1,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::errors::{TryRecvAtMostError, TryRecvError};
+use crate::errors::TryRecvError;
 use crate::sequencers::Sequencer;
 use crate::{RingBuffer, Sequence};
 
@@ -42,22 +42,7 @@ where
         })
     }
 
-    pub fn try_recv_many(&mut self, n: i64) -> Result<ReadBatch<'_, C, T>, TryRecvError> {
-        assert!(n > 0, "n must be positive");
-
-        let (start_seq, end_seq) = self.consumer_sequencer.try_claim_n(n)?;
-        Ok(ReadBatch::new(
-            &self.consumer_sequencer,
-            &self.ring_buffer,
-            start_seq,
-            end_seq,
-        ))
-    }
-
-    pub fn try_recv_at_most(
-        &mut self,
-        limit: i64,
-    ) -> Result<ReadBatch<'_, C, T>, TryRecvAtMostError> {
+    pub fn try_recv_at_most(&mut self, limit: i64) -> Result<ReadBatch<'_, C, T>, TryRecvError> {
         assert!(limit > 0, "limit must be > 0");
 
         let (start_seq, end_seq) = self.consumer_sequencer.try_claim_at_most(limit)?;

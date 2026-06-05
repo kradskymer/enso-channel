@@ -74,7 +74,6 @@ pub(crate) use con_queue::{QueuedConSeqGate, QueuedConsumerSequencer, QueuedCons
 pub(crate) use pub_mul::{MultiPubSeqGate, MultiPublisherSequencer};
 
 use crate::errors::TryClaimError;
-use crate::slot_states::SlotState;
 use crate::Sequence;
 
 /// Internal sequencing contract used by publisher/consumer infrastructure.
@@ -84,11 +83,6 @@ use crate::Sequence;
 /// Users of the crate should not need to import or interact with it.
 #[doc(hidden)]
 pub trait Sequencer: sealed::Sealed {
-    /// Attempts to reserve the next `n` sequences for publishing.
-    /// If successful, returns (next_seq, highest_seq) where highest_seq == next_seq + n - 1.
-    /// If insufficient capacity, returns `TryClaimError::Insufficient` with the number of missing sequences.
-    fn try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError>;
-
     /// Attempts to reserve the next sequence for publishing.
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError>;
 
@@ -128,6 +122,32 @@ pub(crate) trait ConsumerSeqGate {
     fn max_consumed(&self, next_seq: Sequence, end_seq: Sequence) -> SlotState;
 }
 
+/// Combines a sequence value with a shutdown flag.
+///
+/// Returned by [`SlotStateGroup::scan_available_until`] so callers receive both
+/// the last contiguous available sequence and a shutdown signal in one call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SlotState {
+    seq: Sequence,
+    shutdown: bool,
+}
+
+impl SlotState {
+    pub(crate) fn new(seq: Sequence, shutdown: bool) -> Self {
+        Self { seq, shutdown }
+    }
+
+    #[inline]
+    pub(crate) fn sequence(self) -> Sequence {
+        self.seq
+    }
+
+    #[inline]
+    pub(crate) fn is_shutdown(self) -> bool {
+        self.shutdown
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -139,8 +159,7 @@ mod tests {
         ConsumerSeqGate, ExclusiveConsumerSequencer, FanoutConsumerSequencer,
         MultiPublisherSequencer, PublisherSeqGate, QueuedConsumerWiring, Sequencer,
     };
-    use crate::slot_states::SlotState;
-    use crate::{errors::TryClaimError, Cursor, RingBufferMeta, Sequence};
+    use crate::{errors::TryClaimError, sequencers::SlotState, Cursor, RingBufferMeta, Sequence};
 
     #[derive(Clone)]
     struct CursorConsumerGate {
@@ -188,15 +207,17 @@ mod tests {
 
         // 1. Initial Capacity
         // Should be able to claim 8 slots (0..7)
-        let (_, end_seq) = seq.try_claim_n(8).expect("Should claim full capacity");
+        let (_, end_seq) = seq
+            .try_claim_at_most(8)
+            .expect("Should claim full capacity");
         assert_eq!(end_seq, Sequence::new(7));
 
         // 2. Backpressure
         // Next claim should fail
         match seq.try_claim() {
-            Err(TryClaimError::Insufficient { missing }) => assert_eq!(missing, 1),
+            Err(TryClaimError::Empty) => {}
             Ok(_) => panic!("Should be backpressured"),
-            Err(e) => panic!("Unexpected error: {:?}", e),
+            Err(TryClaimError::Shutdown) => panic!("will not shutdown"),
         }
 
         // 3. Advance Consumer
@@ -233,7 +254,7 @@ mod tests {
 
         // 1. Empty
         match seq.try_claim() {
-            Err(TryClaimError::Insufficient { .. }) => {}
+            Err(TryClaimError::Empty) => {}
             Ok(_) => panic!("Should be empty"),
             Err(e) => panic!("Unexpected error: {:?}", e),
         }

@@ -1,10 +1,10 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use super::super::RingBufferMeta;
-use crate::sequencers::Sequencer;
+use crate::sequencers::{Sequencer, SlotState};
 use crate::{
     errors::TryClaimError,
-    slot_states::{SlotState, SlotStateGroup, U32SlotStates},
+    slot_states::{SlotStateGroup, U32SlotStates},
     ConsumerSeqGate, Cursor, PublisherSeqGate, Sequence,
 };
 
@@ -75,46 +75,6 @@ impl<C: ConsumerSeqGate> MultiPublisherSequencer<C> {
         }
     }
 
-    fn do_try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError> {
-        let mut last_claimed = Sequence::new(self.shared_state.claimed.load(Ordering::Relaxed));
-        loop {
-            let highest_to_publish = last_claimed + n;
-            let start_seq = last_claimed + 1;
-            let consumed = self
-                .consumer_gate
-                .max_consumed(start_seq, highest_to_publish);
-            if consumed.is_shutdown() {
-                return Err(TryClaimError::Shutdown);
-            }
-            let max_consumed = consumed.sequence();
-            let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
-            self.max_available = last_claimed + available_capacity;
-
-            if highest_to_publish <= self.max_available {
-                let expected = last_claimed.value();
-                match self.shared_state.claimed.compare_exchange(
-                    expected,
-                    highest_to_publish.value(),
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(_) => {
-                        return Ok((start_seq, highest_to_publish));
-                    }
-                    Err(new_value) => {
-                        let new_seq = Sequence::new(new_value);
-                        last_claimed = new_seq;
-                        continue;
-                    }
-                }
-            } else {
-                return Err(TryClaimError::Insufficient {
-                    missing: n - available_capacity,
-                });
-            }
-        }
-    }
-
     #[inline]
     fn do_commit(&self, seq: Sequence) {
         self.shared_state.slot_states.publish(seq);
@@ -136,12 +96,8 @@ impl<C: ConsumerSeqGate> MultiPublisherSequencer<C> {
 }
 
 impl<C: ConsumerSeqGate> Sequencer for MultiPublisherSequencer<C> {
-    fn try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError> {
-        self.do_try_claim_n(n)
-    }
-
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
-        self.do_try_claim_n(1).map(|(_, end_seq)| end_seq)
+        self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
     }
 
     fn try_claim_at_most(&mut self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError> {

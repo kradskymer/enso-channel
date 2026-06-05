@@ -267,10 +267,8 @@ impl EnsoMpscRunner {
                             next += 1;
                             break;
                         }
-                        Err(enso_channel::errors::TrySendError::InsufficientCapacity {
-                            ..
-                        }) => backoff.spin(),
-                        Err(enso_channel::errors::TrySendError::Disconnected) => {
+                        Err(enso_channel::errors::TrySendError::Full(_)) => backoff.spin(),
+                        Err(enso_channel::errors::TrySendError::Disconnected(_)) => {
                             panic!("enso spsc receiver disconnected")
                         }
                     }
@@ -284,7 +282,7 @@ impl EnsoMpscRunner {
                 backoff.reset();
 
                 loop {
-                    match tx.try_send_many(to_send, || std::hint::black_box(0u64)) {
+                    match tx.try_send_at_most(to_send, || std::hint::black_box(0u64)) {
                         Ok(mut batch) => {
                             let writes = batch.capacity();
                             for _ in 0..writes {
@@ -295,10 +293,8 @@ impl EnsoMpscRunner {
                             sent += writes;
                             break;
                         }
-                        Err(enso_channel::errors::TrySendError::InsufficientCapacity {
-                            ..
-                        }) => backoff.spin(),
-                        Err(enso_channel::errors::TrySendError::Disconnected) => {
+                        Err(enso_channel::errors::TrySendAtMostError::Full) => backoff.spin(),
+                        Err(enso_channel::errors::TrySendAtMostError::Disconnected) => {
                             panic!("enso spsc receiver disconnected")
                         }
                     }
@@ -384,7 +380,7 @@ fn run_enso_receiver(
                         sink.store(*value, Ordering::Release);
                         break;
                     }
-                    Err(enso_channel::errors::TryRecvError::InsufficientItems { .. }) => {
+                    Err(enso_channel::errors::TryRecvError::Empty) => {
                         if stop.load(Ordering::Acquire) {
                             return;
                         }
@@ -397,14 +393,14 @@ fn run_enso_receiver(
             }
         } else {
             loop {
-                match rx.try_recv_many(recv_chunk) {
+                match rx.try_recv_at_most(recv_chunk) {
                     Ok(iter) => {
                         for guard in iter.iter() {
                             sink.store(*guard, Ordering::Release);
                         }
                         break;
                     }
-                    Err(enso_channel::errors::TryRecvError::InsufficientItems { .. }) => {
+                    Err(enso_channel::errors::TryRecvError::Empty) => {
                         if stop.load(Ordering::Acquire) {
                             return;
                         }

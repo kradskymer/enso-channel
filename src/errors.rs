@@ -9,9 +9,6 @@
 /// public error types (TrySendError, TryRecvError, etc.) at the Publisher/Consumer layer.
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum TryClaimError {
-    #[error("Insufficient capacity: missing {missing} sequences")]
-    Insufficient { missing: i64 },
-
     #[error("The channel is empty")]
     Empty,
 
@@ -21,44 +18,23 @@ pub(crate) enum TryClaimError {
 
 #[derive(thiserror::Error, Debug)]
 /// Error returned by `try_send*` operations that require an exact claim size.
-pub enum TrySendError {
-    /// The ring buffer does not currently have enough free capacity.
-    #[error("Insufficient capacity: missing {missing} sequences")]
-    InsufficientCapacity { missing: usize },
+pub enum TrySendError<T> {
+    Full(T),
+    Disconnected(T),
+}
 
-    /// The channel was disconnected (e.g. all receivers were dropped).
-    #[error("The channel is disconnected")]
+#[derive(thiserror::Error, Debug)]
+pub enum TrySendAtMostError {
+    #[error("The channel is full")]
+    Full,
+    #[error("The consumers are disconnected")]
     Disconnected,
 }
 
 #[derive(thiserror::Error, Debug)]
 /// Error returned by `try_recv*` operations that require an exact claim size.
 pub enum TryRecvError {
-    /// Not enough items are currently available.
-    #[error("Insufficient items: missing {missing} sequences")]
-    InsufficientItems { missing: usize },
-
-    /// The channel was disconnected (e.g. all senders were dropped).
-    #[error("The channel is disconnected")]
-    Disconnected,
-}
-
-#[derive(thiserror::Error, Debug)]
-/// Error returned by `try_send_at_most*` operations.
-pub enum TrySendAtMostError {
-    /// No capacity is currently available (0 slots could be claimed).
-    #[error("The channel is full")]
-    Full,
-
-    /// The channel was disconnected (e.g. all receivers were dropped).
-    #[error("The channel is disconnected")]
-    Disconnected,
-}
-
-#[derive(thiserror::Error, Debug)]
-/// Error returned by `try_recv_at_most` operations.
-pub enum TryRecvAtMostError {
-    /// No items are currently available (0 items could be claimed).
+    // /// Not enough items are currently available.
     #[error("The channel is empty")]
     Empty,
 
@@ -67,31 +43,11 @@ pub enum TryRecvAtMostError {
     Disconnected,
 }
 
-impl From<TryClaimError> for TrySendError {
-    #[inline]
-    fn from(err: TryClaimError) -> Self {
-        match err {
-            TryClaimError::Insufficient { missing } => TrySendError::InsufficientCapacity {
-                missing: missing as usize,
-            },
-            TryClaimError::Empty => {
-                unreachable!("Publisher sequencers should not return Empty")
-            }
-            TryClaimError::Shutdown => TrySendError::Disconnected,
-        }
-    }
-}
-
 impl From<TryClaimError> for TryRecvError {
     #[inline]
     fn from(err: TryClaimError) -> Self {
         match err {
-            TryClaimError::Insufficient { missing } => TryRecvError::InsufficientItems {
-                missing: missing as usize,
-            },
-            TryClaimError::Empty => {
-                unreachable!("Empty should be handled before conversion in Consumer")
-            }
+            TryClaimError::Empty => TryRecvError::Empty,
             TryClaimError::Shutdown => TryRecvError::Disconnected,
         }
     }
@@ -103,22 +59,6 @@ impl From<TryClaimError> for TrySendAtMostError {
         match err {
             TryClaimError::Empty => TrySendAtMostError::Full,
             TryClaimError::Shutdown => TrySendAtMostError::Disconnected,
-            TryClaimError::Insufficient { .. } => {
-                unreachable!("Insufficient should be handled before conversion in Publisher")
-            }
-        }
-    }
-}
-
-impl From<TryClaimError> for TryRecvAtMostError {
-    #[inline]
-    fn from(err: TryClaimError) -> Self {
-        match err {
-            TryClaimError::Empty => TryRecvAtMostError::Empty,
-            TryClaimError::Shutdown => TryRecvAtMostError::Disconnected,
-            TryClaimError::Insufficient { .. } => {
-                unreachable!("Insufficient should be handled before conversion in Consumer")
-            }
         }
     }
 }

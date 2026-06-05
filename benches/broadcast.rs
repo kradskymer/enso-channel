@@ -237,8 +237,8 @@ fn run_consumer_loop(
                     }
                     break;
                 }
-                Err(enso_channel::errors::TryRecvAtMostError::Empty) => backoff.spin(),
-                Err(enso_channel::errors::TryRecvAtMostError::Disconnected) => {
+                Err(enso_channel::errors::TryRecvError::Empty) => backoff.spin(),
+                Err(enso_channel::errors::TryRecvError::Disconnected) => {
                     return;
                 }
             }
