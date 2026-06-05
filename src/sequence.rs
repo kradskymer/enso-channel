@@ -3,7 +3,7 @@ pub struct Sequence(i64);
 
 impl Sequence {
     pub const INIT: Self = Self(-1);
-    pub(crate) const SHUTDOWN_OPEN: Self = Self(i64::MIN);
+    pub(crate) const SHUTDOWN_OPEN: Self = Self(i64::MAX);
 
     #[inline]
     pub const fn new(value: i64) -> Self {

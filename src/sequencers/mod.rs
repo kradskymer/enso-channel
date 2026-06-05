@@ -74,6 +74,7 @@ pub(crate) use con_queue::{QueuedConSeqGate, QueuedConsumerSequencer, QueuedCons
 pub(crate) use pub_mul::{MultiPubSeqGate, MultiPublisherSequencer};
 
 use crate::errors::TryClaimError;
+use crate::slot_states::SlotState;
 use crate::Sequence;
 
 /// Internal sequencing contract used by publisher/consumer infrastructure.
@@ -106,39 +107,25 @@ pub trait Sequencer: sealed::Sealed {
 
 /// Gate interface for consumer to coordinate with publisher sequences.
 pub(crate) trait PublisherSeqGate {
-    /// Returns the highest published sequence in the range [`next_seq`, `end_seq`].
-    /// If no sequences are available in the range, then `next_seq - 1` will be returned.
-    fn max_published(&self, next_seq: Sequence, end_seq: Sequence) -> Sequence;
-
-    /// Returns publisher shutdown boundary sequence.
+    /// Returns the highest published sequence in the range [`next_seq`, `end_seq`]
+    /// together with a shutdown flag.
     ///
-    /// Semantics:
-    /// - `Sequence::SHUTDOWN_OPEN` => publisher side is still open.
-    /// - any other value => publisher side is disconnected and the value is
-    ///   the last sequence boundary that consumers may drain.
-    fn shutdown_sequence(&self) -> Sequence;
+    /// When no sequences are available in the range, `SlotState::sequence()`
+    /// returns `next_seq - 1`.  `SlotState::is_shutdown()` is true when the
+    /// publisher side has disconnected and no further sequences will be
+    /// published.
+    fn max_published(&self, next_seq: Sequence, end_seq: Sequence) -> SlotState;
 }
 
 /// Gate interface for publisher to coordinate with consumer sequences.
 pub(crate) trait ConsumerSeqGate {
-    /// Returns the minimum consumed sequence across all consumers.
+    /// Returns the minimum consumed sequence across all consumers together
+    /// with a shutdown flag.
     ///
-    /// For fixed-N broadcast semantics, this is the slowest consumer (minimum of all consumer positions).
-    /// The `next_seq` and `end_seq` parameters provide context about the publisher's query range,
-    /// but the returned value is the actual consumer position, which may be less than `next_seq`.
-    ///
-    /// Returns minimum consumed sequence across all consumers.
-    ///
-    /// Semantics:
-    /// - `Sequence::SHUTDOWN_OPEN` => consumer side is disconnected.
-    /// - any other value => valid max-consumed cursor.
-    fn max_consumed(&self, next_seq: Sequence, end_seq: Sequence) -> Sequence;
-
-    /// Returns true if the consumer side is disconnected.
-    ///
-    /// This is intended to be a constant-time check used by publisher fast-paths
-    /// to avoid claiming/publishing after all consumers are dropped.
-    fn is_disconnected(&self) -> bool;
+    /// For fixed-N broadcast semantics, this is the slowest consumer (minimum
+    /// of all consumer positions).  `SlotState::is_shutdown()` is true when
+    /// the consumer side has disconnected.
+    fn max_consumed(&self, next_seq: Sequence, end_seq: Sequence) -> SlotState;
 }
 
 #[cfg(test)]
@@ -152,6 +139,7 @@ mod tests {
         ConsumerSeqGate, ExclusiveConsumerSequencer, FanoutConsumerSequencer,
         MultiPublisherSequencer, PublisherSeqGate, QueuedConsumerWiring, Sequencer,
     };
+    use crate::slot_states::SlotState;
     use crate::{errors::TryClaimError, Cursor, RingBufferMeta, Sequence};
 
     #[derive(Clone)]
@@ -160,28 +148,28 @@ mod tests {
     }
 
     impl ConsumerSeqGate for CursorConsumerGate {
-        fn max_consumed(&self, _next_seq: Sequence, _end_seq: Sequence) -> Sequence {
-            self.consumed.load(Ordering::Acquire).into()
-        }
-
-        fn is_disconnected(&self) -> bool {
-            self.consumed.load(Ordering::Acquire) == Sequence::SHUTDOWN_OPEN.value()
+        fn max_consumed(&self, _next_seq: Sequence, _end_seq: Sequence) -> SlotState {
+            let seq: Sequence = self.consumed.load(Ordering::Acquire).into();
+            SlotState::new(seq, seq.is_shutdown_open())
         }
     }
 
     #[derive(Clone)]
     struct CursorPublisherGate {
         published: Arc<AtomicI64>,
-        shutdown_sequence: Arc<AtomicI64>,
     }
 
     impl PublisherSeqGate for CursorPublisherGate {
-        fn max_published(&self, _next_seq: Sequence, _end_seq: Sequence) -> Sequence {
-            Sequence::new(self.published.load(Ordering::Acquire))
-        }
-
-        fn shutdown_sequence(&self) -> Sequence {
-            self.shutdown_sequence.load(Ordering::Acquire).into()
+        fn max_published(&self, _next_seq: Sequence, _end_seq: Sequence) -> SlotState {
+            let value = self.published.load(Ordering::Acquire);
+            let seq = Sequence::new(value);
+            if seq.is_shutdown_open() {
+                // Shutdown sentinel: return INIT as the boundary so callers
+                // don't misinterpret SHUTDOWN_OPEN as a claimable sequence.
+                SlotState::new(Sequence::INIT, true)
+            } else {
+                SlotState::new(seq, false)
+            }
         }
     }
 
@@ -236,10 +224,8 @@ mod tests {
         F: Fn(Arc<CursorPublisherGate>, RingBufferMeta) -> S,
     {
         let published = Arc::new(AtomicI64::new(Sequence::INIT.value())); // -1
-        let shutdown_sequence = Arc::new(AtomicI64::new(Sequence::SHUTDOWN_OPEN.value()));
         let gate = Arc::new(CursorPublisherGate {
             published: published.clone(),
-            shutdown_sequence: shutdown_sequence.clone(),
         });
         let ring_meta = RingBufferMeta::new(8);
 
@@ -258,15 +244,9 @@ mod tests {
         assert_eq!(claimed, Sequence::new(0));
         seq.commit(claimed);
 
-        // 3. Shutdown
-        // Publish up to 1, but shutdown at 1
-        published.store(1, Ordering::Release);
-        shutdown_sequence.store(1, Ordering::Release);
-
-        // Should claim 1
-        let claimed = seq.try_claim().expect("Should claim item before shutdown");
-        assert_eq!(claimed, Sequence::new(1));
-        seq.commit(claimed);
+        // 3. Shutdown — signal by storing SHUTDOWN_OPEN in published.
+        // The CursorPublisherGate reads `published` and treats SHUTDOWN_OPEN as shutdown.
+        published.store(Sequence::SHUTDOWN_OPEN.value(), Ordering::Release);
 
         // Next should be disconnected
         match seq.try_claim() {
@@ -293,8 +273,7 @@ mod tests {
     fn fanout_consumer_sequencer_generic() {
         run_consumer_test_suite(|gate, ring_meta| {
             let consumed = Arc::new(Cursor::new(Sequence::INIT));
-            let connected = Arc::new(std::sync::atomic::AtomicUsize::new(1));
-            FanoutConsumerSequencer::new(gate, consumed, connected, ring_meta)
+            FanoutConsumerSequencer::new(gate, consumed, ring_meta)
         });
     }
 
@@ -311,11 +290,7 @@ mod tests {
     fn queue_consumers_split_work_across_clones() {
         let ring_meta = RingBufferMeta::new(8);
         let published = Arc::new(AtomicI64::new(3));
-        let shutdown_sequence = Arc::new(AtomicI64::new(Sequence::SHUTDOWN_OPEN.value()));
-        let producer_gate = Arc::new(CursorPublisherGate {
-            published,
-            shutdown_sequence,
-        });
+        let producer_gate = Arc::new(CursorPublisherGate { published });
 
         let (_gate, wiring) = QueuedConsumerWiring::new(ring_meta);
         let mut rx1 = wiring.build_consumer(producer_gate.clone(), ring_meta);
@@ -388,10 +363,8 @@ mod tests {
         F: Fn(Arc<CursorPublisherGate>) -> S,
     {
         let published = Arc::new(AtomicI64::new(Sequence::INIT.value()));
-        let shutdown_sequence = Arc::new(AtomicI64::new(Sequence::SHUTDOWN_OPEN.value()));
         let gate = Arc::new(CursorPublisherGate {
             published: published.clone(),
-            shutdown_sequence: shutdown_sequence.clone(),
         });
 
         let mut seq = make(gate.clone());
@@ -418,7 +391,7 @@ mod tests {
         seq.commit_range(start_seq, end_seq);
 
         // 4. Shutdown
-        shutdown_sequence.store(6, Ordering::Release);
+        published.store(Sequence::SHUTDOWN_OPEN.value(), Ordering::Release);
         match seq.try_claim_at_most(1) {
             Err(TryClaimError::Shutdown) => {}
             Ok(v) => panic!("Should be disconnected, {:?}", v),
@@ -444,9 +417,8 @@ mod tests {
     fn fanout_consumer_sequencer_at_most() {
         run_consumer_at_most_test_suite(|gate| {
             let consumed = Arc::new(Cursor::new(Sequence::INIT));
-            let connected = Arc::new(std::sync::atomic::AtomicUsize::new(1));
             let ring_meta = RingBufferMeta::new(8);
-            FanoutConsumerSequencer::new(gate, consumed, connected, ring_meta)
+            FanoutConsumerSequencer::new(gate, consumed, ring_meta)
         });
     }
 

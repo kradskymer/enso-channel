@@ -1,33 +1,23 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::{atomic::Ordering, Arc};
 
 use crate::{
-    errors::TryClaimError, sequencers::Sequencer, ConsumerSeqGate, Cursor, PublisherSeqGate,
-    RingBufferMeta, Sequence,
+    errors::TryClaimError, sequencers::Sequencer, slot_states::SlotState, ConsumerSeqGate, Cursor,
+    PublisherSeqGate, RingBufferMeta, Sequence,
 };
 
 // Removed ConsumerOps adapter
 
 pub(crate) struct FanoutConsumerSequencer<P: PublisherSeqGate> {
     consumed: Arc<Cursor>,
-    connected: Arc<AtomicUsize>,
     max_published: Sequence,
     producer_gate: Arc<P>,
     ring_meta: RingBufferMeta,
 }
 
 impl<P: PublisherSeqGate> FanoutConsumerSequencer<P> {
-    pub fn new(
-        producer_gate: Arc<P>,
-        consumed: Arc<Cursor>,
-        connected: Arc<AtomicUsize>,
-        ring_meta: RingBufferMeta,
-    ) -> Self {
+    pub fn new(producer_gate: Arc<P>, consumed: Arc<Cursor>, ring_meta: RingBufferMeta) -> Self {
         Self {
             consumed,
-            connected,
             max_published: Sequence::INIT,
             producer_gate,
             ring_meta,
@@ -46,24 +36,22 @@ impl<P: PublisherSeqGate> Sequencer for FanoutConsumerSequencer<P> {
         }
 
         let start_seq = last_consumed + 1;
-        let max_published = self
+        let state = self
             .producer_gate
             .max_published(start_seq, highest_to_claim);
+        let max_published = state.sequence();
         if max_published > self.max_published {
             self.max_published = max_published;
         }
-        if max_published >= highest_to_claim {
-            return Ok((next_claim, highest_to_claim));
-        }
-
-        let shutdown_sequence = self.producer_gate.shutdown_sequence();
-        if !shutdown_sequence.is_shutdown_open() {
+        if state.is_shutdown() {
             // Producer has shutdown. Check if we've consumed all available data.
-            if last_consumed >= shutdown_sequence {
-                // All data drained, safe to disconnect
+            if last_consumed >= max_published {
                 return Err(TryClaimError::Shutdown);
             }
-            // Still have data to consume, return Insufficient to allow draining
+        }
+
+        if max_published >= highest_to_claim {
+            return Ok((next_claim, highest_to_claim));
         }
 
         Err(TryClaimError::Insufficient {
@@ -82,23 +70,27 @@ impl<P: PublisherSeqGate> Sequencer for FanoutConsumerSequencer<P> {
         let highest_to_consume = last_claimed + n;
 
         if highest_to_consume > self.max_published {
-            let max_published = self
+            let state = self
                 .producer_gate
                 .max_published(start_seq, highest_to_consume);
-            self.max_published = max_published;
+            self.max_published = state.sequence();
         }
 
         if highest_to_consume <= self.max_published {
             return Ok((start_seq, highest_to_consume));
         }
 
-        let shutdown_sequence = self.producer_gate.shutdown_sequence();
-        let end_seq = if !shutdown_sequence.is_shutdown_open() {
-            if last_claimed >= shutdown_sequence {
+        let state = self
+            .producer_gate
+            .max_published(start_seq, highest_to_consume);
+        self.max_published = state.sequence();
+
+        let end_seq = if state.is_shutdown() {
+            if last_claimed >= self.max_published {
                 return Err(TryClaimError::Shutdown);
             }
 
-            let end_seq = shutdown_sequence.min(self.max_published);
+            let end_seq = self.max_published;
             if start_seq > end_seq {
                 return Err(TryClaimError::Empty);
             }
@@ -132,63 +124,28 @@ impl<P: PublisherSeqGate> Drop for FanoutConsumerSequencer<P> {
         // Mark this consumer as inactive so it no longer gates publishers.
         self.consumed
             .store(Sequence::SHUTDOWN_OPEN.value(), Ordering::Release);
-
-        // If this was the last consumer, publishers must observe a disconnected state.
-        // Saturation is not expected (each consumer sequencer is dropped once).
-        let prev = self.connected.fetch_sub(1, Ordering::AcqRel);
-        debug_assert!(prev > 0, "broadcast connected counter underflow");
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct FanoutConSeqGate<const N: usize> {
     consumed: [Arc<Cursor>; N],
-    connected: Arc<AtomicUsize>,
 }
 
 impl<const N: usize> FanoutConSeqGate<N> {
     pub(crate) fn new(consumed: [Arc<Cursor>; N]) -> Self {
-        Self {
-            consumed,
-            connected: Arc::new(AtomicUsize::new(N)),
-        }
-    }
-
-    pub(crate) fn disconnect_counter(&self) -> Arc<AtomicUsize> {
-        self.connected.clone()
+        Self { consumed }
     }
 }
 
 impl<const N: usize> ConsumerSeqGate for FanoutConSeqGate<N> {
-    fn max_consumed(&self, _next_seq: Sequence, _end_seq: Sequence) -> Sequence {
-        if self.connected.load(Ordering::Acquire) == 0 {
-            return Sequence::SHUTDOWN_OPEN;
-        }
-
-        let mut min_consumed: Option<Sequence> = None;
+    fn max_consumed(&self, _next_seq: Sequence, _end_seq: Sequence) -> SlotState {
+        let mut min_consumed = Sequence::SHUTDOWN_OPEN;
         for i in 0..N {
             let value = self.consumed[i].load(Ordering::Acquire);
             let seq = Sequence::new(value);
-            if seq.is_shutdown_open() {
-                // Consumer has been dropped; it must not gate the publisher.
-                continue;
-            }
-            min_consumed = Some(match min_consumed {
-                Some(current) => current.min(seq),
-                None => seq,
-            });
+            min_consumed = min_consumed.min(seq);
         }
-
-        let Some(min_consumed) = min_consumed else {
-            // All consumers have been dropped; publishers must observe a disconnected state.
-            return Sequence::SHUTDOWN_OPEN;
-        };
-
-        min_consumed
-    }
-
-    #[inline]
-    fn is_disconnected(&self) -> bool {
-        self.connected.load(Ordering::Acquire) == 0
+        SlotState::new(min_consumed, min_consumed.is_shutdown_open())
     }
 }

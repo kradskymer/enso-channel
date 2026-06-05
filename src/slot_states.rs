@@ -2,6 +2,32 @@ use std::sync::atomic::{fence, AtomicU32, Ordering};
 
 use crate::{RingBufferMeta, Sequence};
 
+/// Combines a sequence value with a shutdown flag.
+///
+/// Returned by [`SlotStateGroup::scan_available_until`] so callers receive both
+/// the last contiguous available sequence and a shutdown signal in one call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SlotState {
+    seq: Sequence,
+    shutdown: bool,
+}
+
+impl SlotState {
+    pub(crate) fn new(seq: Sequence, shutdown: bool) -> Self {
+        Self { seq, shutdown }
+    }
+
+    #[inline]
+    pub(crate) fn sequence(self) -> Sequence {
+        self.seq
+    }
+
+    #[inline]
+    pub(crate) fn is_shutdown(self) -> bool {
+        self.shutdown
+    }
+}
+
 /// Shared abstraction for per-slot state tracking in the ring buffer.
 pub(crate) trait SlotStateGroup: Send + Sync {
     /// Marks the inclusive range `[start, end]` as completed/published. Implementers
@@ -14,13 +40,16 @@ pub(crate) trait SlotStateGroup: Send + Sync {
     fn publish(&self, seq: Sequence);
 
     /// Scans from `start` toward `end` and returns the last *contiguous* sequence
-    /// that is currently available. If `start` itself is unavailable, the return
-    /// value is `start - 1`.
+    /// that is currently available together with a shutdown flag.
+    ///
+    /// The returned [`SlotState::sequence()`] is `start - 1` when `start` itself
+    /// is unavailable.  The [`SlotState::is_shutdown()`] flag is true when the
+    /// opposing side has marked a slot within the scan range as shut down.
     ///
     /// "Available" is context dependent:
     /// - On the publisher side it means consumers have freed the slot.
     /// - On the consumer side it means publishers have published the slot.
-    fn scan_available_until(&self, start: Sequence, end: Sequence) -> Sequence;
+    fn scan_available_until(&self, start: Sequence, end: Sequence) -> SlotState;
 }
 
 /// Per-slot state tracking using `u32` lap flags.
@@ -55,6 +84,13 @@ pub(crate) struct U32SlotStates {
     flag_adjustment: u32,
 }
 
+/// Mask that reserves the highest bit (bit 31) for shutdown signaling.
+/// The lower 31 bits carry the lap flag.
+const MASK: u32 = (1 << 31) - 1;
+
+/// The shutdown bit within the per-slot `u32` state.
+const SHUTDOWN_BIT: u32 = 1 << 31;
+
 impl U32SlotStates {
     pub(crate) fn new_all_empty(ring_meta: RingBufferMeta) -> Self {
         let capacity = ring_meta.buffer_size() as usize;
@@ -71,7 +107,7 @@ impl U32SlotStates {
 
     pub(crate) fn new_all_available(ring_meta: RingBufferMeta) -> Self {
         let capacity = ring_meta.buffer_size() as usize;
-        let states = (0..capacity).map(|_| AtomicU32::new(u32::MAX)).collect();
+        let states = (0..capacity).map(|_| AtomicU32::new(MASK)).collect();
 
         let index_shift = capacity.trailing_zeros() as i64;
         Self {
@@ -87,13 +123,51 @@ impl U32SlotStates {
     }
 
     fn available_flag(&self, seq: Sequence) -> u32 {
-        ((seq.value() >> self.index_shift) as u32).wrapping_add(self.flag_adjustment)
+        let lap = (seq.value() >> self.index_shift) as u32;
+        lap.wrapping_add(self.flag_adjustment) & MASK
     }
 
     fn slot_state(&self, seq: Sequence) -> (usize, u32) {
         let index = self.slot_index(seq);
         let flag = self.available_flag(seq);
         (index, flag)
+    }
+
+    /// Sets the shutdown bit (bit 31) on the slot for `seq`.
+    #[inline]
+    pub(crate) fn mark_shutdown(&self, seq: Sequence) {
+        let index = self.slot_index(seq);
+        self.states[index].fetch_or(SHUTDOWN_BIT, Ordering::Release);
+    }
+
+    /// Sets the shutdown bit on a specific slot by index (used for bulk
+    /// marking during consumer drop).
+    #[inline]
+    pub(crate) fn mark_shutdown_at_index(&self, index: usize) {
+        self.states[index].fetch_or(SHUTDOWN_BIT, Ordering::Release);
+    }
+
+    /// Scans from `start` toward `end` and returns the last *contiguous*
+    /// sequence whose lap flag matches, **without** shutdown detection.
+    ///
+    /// This internal helper is used during shutdown to discover the
+    /// last-committed / last-published boundary before setting the shutdown
+    /// bit.  Callers must not use it on the hot path.
+    pub(crate) fn scan_last_available(&self, start: Sequence, end: Sequence) -> Sequence {
+        debug_assert!(start <= end, "scan range must be ordered");
+        let mut last_available = start.value() - 1;
+        for seq_value in start.value()..=end.value() {
+            let seq = Sequence::new(seq_value);
+            let (index, flag) = self.slot_state(seq);
+            if self.states[index].load(Ordering::Relaxed) & MASK != flag {
+                break;
+            }
+            last_available = seq_value;
+        }
+        if last_available >= start.value() {
+            fence(Ordering::Acquire);
+        }
+        Sequence::new(last_available)
     }
 }
 
@@ -110,13 +184,16 @@ impl SlotStateGroup for U32SlotStates {
     }
 
     #[inline]
-    fn scan_available_until(&self, start: Sequence, end: Sequence) -> Sequence {
+    fn scan_available_until(&self, start: Sequence, end: Sequence) -> SlotState {
         debug_assert!(start <= end, "scan range must be ordered");
         let mut last_available = start.value() - 1;
+        let mut shutdown = false;
         for seq_value in start.value()..=end.value() {
             let seq = Sequence::new(seq_value);
             let (index, flag) = self.slot_state(seq);
-            if self.states[index].load(Ordering::Relaxed) != flag {
+            let raw = self.states[index].load(Ordering::Relaxed);
+            shutdown |= (raw & SHUTDOWN_BIT) != 0;
+            if (raw & MASK) != flag {
                 break;
             }
             last_available = seq_value;
@@ -125,7 +202,7 @@ impl SlotStateGroup for U32SlotStates {
         if last_available >= start.value() {
             fence(Ordering::Acquire);
         }
-        Sequence::new(last_available)
+        SlotState::new(Sequence::new(last_available), shutdown)
     }
 
     #[inline]
@@ -145,59 +222,68 @@ mod tests {
         let ring = RingBufferMeta::new(8);
         let states = make(ring);
 
+        // Helper: scan and unwrap sequence (tests with no shutdown).
+        let scan_seq = |s: &G, start, end| s.scan_available_until(start, end).sequence();
+
         // Empty scans should return start - 1.
         assert_eq!(
-            states.scan_available_until(Sequence::new(0), Sequence::new(0)),
+            scan_seq(&states, Sequence::new(0), Sequence::new(0)),
             Sequence::new(-1)
         );
         assert_eq!(
-            states.scan_available_until(Sequence::new(5), Sequence::new(7)),
+            scan_seq(&states, Sequence::new(5), Sequence::new(7)),
             Sequence::new(4)
         );
 
         // Publishing a single sequence should make it available.
         states.publish(Sequence::new(0));
         assert_eq!(
-            states.scan_available_until(Sequence::new(0), Sequence::new(0)),
+            scan_seq(&states, Sequence::new(0), Sequence::new(0)),
             Sequence::new(0)
         );
 
         // Publishing with a hole should stop at the last contiguous sequence.
         states.publish(Sequence::new(2));
         assert_eq!(
-            states.scan_available_until(Sequence::new(0), Sequence::new(2)),
+            scan_seq(&states, Sequence::new(0), Sequence::new(2)),
             Sequence::new(0)
         );
 
         // Filling the hole makes the range contiguous.
         states.publish(Sequence::new(1));
         assert_eq!(
-            states.scan_available_until(Sequence::new(0), Sequence::new(2)),
+            scan_seq(&states, Sequence::new(0), Sequence::new(2)),
             Sequence::new(2)
         );
 
         // publish_range should make the entire inclusive range available.
         states.publish_range(Sequence::new(3), Sequence::new(5));
         assert_eq!(
-            states.scan_available_until(Sequence::new(0), Sequence::new(5)),
+            scan_seq(&states, Sequence::new(0), Sequence::new(5)),
             Sequence::new(5)
         );
 
         // Test scanning a subset of available range
         assert_eq!(
-            states.scan_available_until(Sequence::new(3), Sequence::new(4)),
+            scan_seq(&states, Sequence::new(3), Sequence::new(4)),
             Sequence::new(4)
         );
+
+        // Verify no false shutdown in normal operation.
+        let result = states.scan_available_until(Sequence::new(0), Sequence::new(5));
+        assert!(!result.is_shutdown());
     }
 
     fn run_lap_handling_suite<G: SlotStateGroup>(make: impl Fn(RingBufferMeta) -> G) {
         let ring = RingBufferMeta::new(4); // Small ring for easier wrapping
         let states = make(ring);
 
+        let scan_seq = |s: &G, start, end| s.scan_available_until(start, end).sequence();
+
         // Publish seq 0 (lap 0, slot 0).
         states.publish(Sequence::new(0));
         assert_eq!(
-            states.scan_available_until(Sequence::new(0), Sequence::new(0)),
+            scan_seq(&states, Sequence::new(0), Sequence::new(0)),
             Sequence::new(0)
         );
 
@@ -206,12 +292,12 @@ mod tests {
 
         // Seq 0 should no longer be available.
         assert_eq!(
-            states.scan_available_until(Sequence::new(0), Sequence::new(0)),
+            scan_seq(&states, Sequence::new(0), Sequence::new(0)),
             Sequence::new(-1)
         );
         // Seq 4 should be available.
         assert_eq!(
-            states.scan_available_until(Sequence::new(4), Sequence::new(4)),
+            scan_seq(&states, Sequence::new(4), Sequence::new(4)),
             Sequence::new(4)
         );
 
@@ -219,40 +305,58 @@ mod tests {
         // Current state: Slot 0 has seq 4. Slots 1,2,3 are empty (seq -1 effectively).
 
         // Publish range 2..5.
-        // Slot 2 -> seq 2 (lap 0)
-        // Slot 3 -> seq 3 (lap 0)
-        // Slot 0 -> seq 4 (lap 1) - already there, but publish_range should handle it idempotent or update
-        // Slot 1 -> seq 5 (lap 1)
         states.publish_range(Sequence::new(2), Sequence::new(5));
 
         // Check availability
-        // Seq 2..3 should be available
         assert_eq!(
-            states.scan_available_until(Sequence::new(2), Sequence::new(3)),
+            scan_seq(&states, Sequence::new(2), Sequence::new(3)),
             Sequence::new(3)
         );
 
-        // Seq 4..5 should be available
         assert_eq!(
-            states.scan_available_until(Sequence::new(4), Sequence::new(5)),
+            scan_seq(&states, Sequence::new(4), Sequence::new(5)),
             Sequence::new(5)
         );
 
         // Seq 0..1 should NOT be available (overwritten by 4, 5)
         assert_eq!(
-            states.scan_available_until(Sequence::new(0), Sequence::new(1)),
+            scan_seq(&states, Sequence::new(0), Sequence::new(1)),
             Sequence::new(-1)
         );
 
         // Mixed scan: 2..5.
-        // Slot 2 (seq 2) -> OK
-        // Slot 3 (seq 3) -> OK
-        // Slot 0 (seq 4) -> OK
-        // Slot 1 (seq 5) -> OK
         assert_eq!(
-            states.scan_available_until(Sequence::new(2), Sequence::new(5)),
+            scan_seq(&states, Sequence::new(2), Sequence::new(5)),
             Sequence::new(5)
         );
+    }
+
+    #[test]
+    fn shutdown_bit_detected_by_scan() {
+        let ring = RingBufferMeta::new(4);
+        let states = U32SlotStates::new_all_empty(ring);
+
+        // Publish 0..2, then mark slot 3 (seq 3) as shutdown.
+        states.publish_range(Sequence::new(0), Sequence::new(2));
+        states.mark_shutdown(Sequence::new(3));
+
+        let result = states.scan_available_until(Sequence::new(0), Sequence::new(3));
+        assert_eq!(result.sequence(), Sequence::new(2));
+        assert!(result.is_shutdown());
+    }
+
+    #[test]
+    fn shutdown_on_published_slot_still_detected() {
+        let ring = RingBufferMeta::new(4);
+        let states = U32SlotStates::new_all_empty(ring);
+
+        // Publish 0..3, mark shutdown on seq 3 itself.
+        states.publish_range(Sequence::new(0), Sequence::new(3));
+        states.mark_shutdown(Sequence::new(3));
+
+        let result = states.scan_available_until(Sequence::new(0), Sequence::new(3));
+        assert_eq!(result.sequence(), Sequence::new(3));
+        assert!(result.is_shutdown());
     }
 
     macro_rules! generate_slot_state_tests {

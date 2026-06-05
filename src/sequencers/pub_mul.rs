@@ -4,7 +4,7 @@ use super::super::RingBufferMeta;
 use crate::sequencers::Sequencer;
 use crate::{
     errors::TryClaimError,
-    slot_states::{SlotStateGroup, U32SlotStates},
+    slot_states::{SlotState, SlotStateGroup, U32SlotStates},
     ConsumerSeqGate, Cursor, PublisherSeqGate, Sequence,
 };
 
@@ -19,7 +19,6 @@ pub(crate) struct MultiPublisherSequencer<C: ConsumerSeqGate> {
 struct SharedState {
     claimed: Arc<Cursor>,
     slot_states: Arc<U32SlotStates>,
-    shutdown_sequence: Arc<Cursor>,
     buffer_size: i64,
 }
 
@@ -28,7 +27,6 @@ impl SharedState {
         Self {
             claimed: Arc::new(Cursor::INIT),
             slot_states: Arc::new(U32SlotStates::new_all_empty(ring_meta)),
-            shutdown_sequence: Arc::new(Cursor::new(Sequence::SHUTDOWN_OPEN)),
             buffer_size: ring_meta.buffer_size(),
         }
     }
@@ -52,15 +50,12 @@ impl SharedState {
             let window_start_value = (last_claimed.value() - (self.buffer_size - 1)).max(0);
             let window_start = Sequence::new(window_start_value);
             self.slot_states
-                .scan_available_until(window_start, last_claimed)
+                .scan_last_available(window_start, last_claimed)
         };
 
-        let _ = self.shutdown_sequence.compare_exchange(
-            Sequence::SHUTDOWN_OPEN.value(),
-            last_published.value(),
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        // Mark the first unpublished slot as the shutdown boundary.
+        // This makes the shutdown visible to consumers via the scan.
+        self.slot_states.mark_shutdown(last_published + 1);
     }
 }
 
@@ -85,12 +80,17 @@ impl<C: ConsumerSeqGate> MultiPublisherSequencer<C> {
         loop {
             let highest_to_publish = last_claimed + n;
             let start_seq = last_claimed + 1;
+            let consumed = self
+                .consumer_gate
+                .max_consumed(start_seq, highest_to_publish);
+            if consumed.is_shutdown() {
+                return Err(TryClaimError::Shutdown);
+            }
+            let max_consumed = consumed.sequence();
+            let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
+            self.max_available = last_claimed + available_capacity;
 
             if highest_to_publish <= self.max_available {
-                if self.consumer_gate.is_disconnected() {
-                    return Err(TryClaimError::Shutdown);
-                }
-
                 let expected = last_claimed.value();
                 match self.shared_state.claimed.compare_exchange(
                     expected,
@@ -107,18 +107,7 @@ impl<C: ConsumerSeqGate> MultiPublisherSequencer<C> {
                         continue;
                     }
                 }
-            }
-
-            let max_consumed = self
-                .consumer_gate
-                .max_consumed(start_seq, highest_to_publish);
-            if max_consumed.is_shutdown_open() {
-                return Err(TryClaimError::Shutdown);
-            }
-
-            let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
-            self.max_available = last_claimed + available_capacity;
-            if available_capacity < n {
+            } else {
                 return Err(TryClaimError::Insufficient {
                     missing: n - available_capacity,
                 });
@@ -142,7 +131,6 @@ impl<C: ConsumerSeqGate> MultiPublisherSequencer<C> {
     pub(crate) fn publisher_gate(&self) -> MultiPubSeqGate {
         MultiPubSeqGate {
             slot_states: self.shared_state.slot_states.clone(),
-            shutdown_sequence: self.shared_state.shutdown_sequence.clone(),
         }
     }
 }
@@ -164,25 +152,20 @@ impl<C: ConsumerSeqGate> Sequencer for MultiPublisherSequencer<C> {
             let highest_to_publish = last_claimed + n;
             let start_seq = last_claimed + 1;
 
-            if highest_to_publish > self.max_available {
-                let max_consumed = self
-                    .consumer_gate
-                    .max_consumed(start_seq, highest_to_publish);
-                if max_consumed.is_shutdown_open() {
-                    return Err(TryClaimError::Shutdown);
-                }
-
-                let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
-                self.max_available = last_claimed + available_capacity;
+            let consumed = self
+                .consumer_gate
+                .max_consumed(start_seq, highest_to_publish);
+            if consumed.is_shutdown() {
+                return Err(TryClaimError::Shutdown);
             }
+            let max_consumed = consumed.sequence();
+
+            let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
+            self.max_available = last_claimed + available_capacity;
 
             // None available
             if start_seq > self.max_available {
                 return Err(TryClaimError::Empty);
-            }
-
-            if self.consumer_gate.is_disconnected() {
-                return Err(TryClaimError::Shutdown);
             }
 
             let available = (self.max_available.value() - last_claimed.value()).min(n);
@@ -221,17 +204,11 @@ impl<C: ConsumerSeqGate> crate::sequencers::sealed::Sealed for MultiPublisherSeq
 #[derive(Clone)]
 pub(crate) struct MultiPubSeqGate {
     slot_states: Arc<U32SlotStates>,
-    shutdown_sequence: Arc<Cursor>,
 }
 
 impl PublisherSeqGate for MultiPubSeqGate {
     #[inline]
-    fn max_published(&self, next_seq: Sequence, end_seq: Sequence) -> Sequence {
+    fn max_published(&self, next_seq: Sequence, end_seq: Sequence) -> SlotState {
         self.slot_states.scan_available_until(next_seq, end_seq)
-    }
-
-    #[inline]
-    fn shutdown_sequence(&self) -> Sequence {
-        self.shutdown_sequence.load(Ordering::Acquire).into()
     }
 }

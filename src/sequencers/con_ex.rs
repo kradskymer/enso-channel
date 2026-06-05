@@ -1,6 +1,7 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use crate::sequencers::Sequencer;
+use crate::slot_states::SlotState;
 use crate::RingBufferMeta;
 use crate::{errors::TryClaimError, ConsumerSeqGate, Cursor, PublisherSeqGate, Sequence};
 
@@ -36,24 +37,22 @@ impl<P: PublisherSeqGate> ExclusiveConsumerSequencer<P> {
             return Ok((next_claim, highest_to_claim));
         }
 
-        let max_published = self
+        let state = self
             .producer_gate
             .max_published(next_claim, highest_to_claim);
+        let max_published = state.sequence();
         if max_published > self.max_published {
             self.max_published = max_published;
         }
-        if max_published >= highest_to_claim {
-            return Ok((next_claim, highest_to_claim));
-        }
-
-        let shutdown_sequence = self.producer_gate.shutdown_sequence();
-        if !shutdown_sequence.is_shutdown_open() {
+        if state.is_shutdown() {
             // Producer has shutdown. Check if we've consumed all available data.
-            if last_consumed >= shutdown_sequence {
-                // All data drained, safe to disconnect
+            if last_consumed >= max_published {
                 return Err(TryClaimError::Shutdown);
             }
-            // Still have data to consume, return Insufficient to allow draining
+        }
+
+        if max_published >= highest_to_claim {
+            return Ok((next_claim, highest_to_claim));
         }
 
         Err(TryClaimError::Insufficient {
@@ -88,23 +87,27 @@ impl<P: PublisherSeqGate> Sequencer for ExclusiveConsumerSequencer<P> {
         let highest_to_consume = last_claimed + n;
 
         if highest_to_consume > self.max_published {
-            let max_published = self
+            let state = self
                 .producer_gate
                 .max_published(start_seq, highest_to_consume);
-            self.max_published = max_published;
+            self.max_published = state.sequence();
         }
 
         if highest_to_consume <= self.max_published {
             return Ok((start_seq, highest_to_consume));
         }
 
-        let shutdown_sequence = self.producer_gate.shutdown_sequence();
-        let end_seq = if !shutdown_sequence.is_shutdown_open() {
-            if last_claimed >= shutdown_sequence {
+        let state = self
+            .producer_gate
+            .max_published(start_seq, highest_to_consume);
+        self.max_published = state.sequence();
+
+        let end_seq = if state.is_shutdown() {
+            if last_claimed >= self.max_published {
                 return Err(TryClaimError::Shutdown);
             }
 
-            let end_seq = shutdown_sequence.min(self.max_published);
+            let end_seq = self.max_published;
             if start_seq > end_seq {
                 return Err(TryClaimError::Empty);
             }
@@ -154,12 +157,9 @@ impl ExclusiveConSeqGate {
 }
 
 impl ConsumerSeqGate for ExclusiveConSeqGate {
-    fn max_consumed(&self, _next_seq: crate::Sequence, _end_seq: crate::Sequence) -> Sequence {
-        Sequence::new(self.consumed.load(Ordering::Acquire))
-    }
-
-    #[inline]
-    fn is_disconnected(&self) -> bool {
-        Sequence::new(self.consumed.load(Ordering::Acquire)).is_shutdown_open()
+    fn max_consumed(&self, _next_seq: crate::Sequence, _end_seq: crate::Sequence) -> SlotState {
+        let value = self.consumed.load(Ordering::Acquire);
+        let seq = Sequence::new(value);
+        SlotState::new(seq, seq.is_shutdown_open())
     }
 }
