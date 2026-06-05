@@ -1,15 +1,15 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use super::super::RingBufferMeta;
-use crate::sequencers::Sequencer;
+use crate::sequencers::{ConsumerBarrier, ProducerBarrier, Sequencer, SlotState};
 use crate::{
     errors::TryClaimError,
-    slot_states::{SlotState, SlotStateGroup, U32SlotStates},
-    ConsumerSeqGate, Cursor, PublisherSeqGate, Sequence,
+    slot_states::{SlotStateGroup, U32SlotStates},
+    Cursor, Sequence,
 };
 
 #[derive(Clone)]
-pub(crate) struct MultiPublisherSequencer<C: ConsumerSeqGate> {
+pub(crate) struct MultiPublisherSequencer<C: ConsumerBarrier> {
     shared_state: Arc<SharedState>,
     max_available: Sequence,
     consumer_gate: Arc<C>,
@@ -65,53 +65,13 @@ impl Drop for SharedState {
     }
 }
 
-impl<C: ConsumerSeqGate> MultiPublisherSequencer<C> {
+impl<C: ConsumerBarrier> MultiPublisherSequencer<C> {
     pub(crate) fn new(consumer_gate: Arc<C>, ring_meta: RingBufferMeta) -> Self {
         Self {
             shared_state: Arc::new(SharedState::new(ring_meta)),
             max_available: Sequence::INIT,
             consumer_gate,
             ring_meta,
-        }
-    }
-
-    fn do_try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError> {
-        let mut last_claimed = Sequence::new(self.shared_state.claimed.load(Ordering::Relaxed));
-        loop {
-            let highest_to_publish = last_claimed + n;
-            let start_seq = last_claimed + 1;
-            let consumed = self
-                .consumer_gate
-                .max_consumed(start_seq, highest_to_publish);
-            if consumed.is_shutdown() {
-                return Err(TryClaimError::Shutdown);
-            }
-            let max_consumed = consumed.sequence();
-            let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
-            self.max_available = last_claimed + available_capacity;
-
-            if highest_to_publish <= self.max_available {
-                let expected = last_claimed.value();
-                match self.shared_state.claimed.compare_exchange(
-                    expected,
-                    highest_to_publish.value(),
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(_) => {
-                        return Ok((start_seq, highest_to_publish));
-                    }
-                    Err(new_value) => {
-                        let new_seq = Sequence::new(new_value);
-                        last_claimed = new_seq;
-                        continue;
-                    }
-                }
-            } else {
-                return Err(TryClaimError::Insufficient {
-                    missing: n - available_capacity,
-                });
-            }
         }
     }
 
@@ -135,13 +95,9 @@ impl<C: ConsumerSeqGate> MultiPublisherSequencer<C> {
     }
 }
 
-impl<C: ConsumerSeqGate> Sequencer for MultiPublisherSequencer<C> {
-    fn try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError> {
-        self.do_try_claim_n(n)
-    }
-
+impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
-        self.do_try_claim_n(1).map(|(_, end_seq)| end_seq)
+        self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
     }
 
     fn try_claim_at_most(&mut self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError> {
@@ -199,14 +155,14 @@ impl<C: ConsumerSeqGate> Sequencer for MultiPublisherSequencer<C> {
     }
 }
 
-impl<C: ConsumerSeqGate> crate::sequencers::sealed::Sealed for MultiPublisherSequencer<C> {}
+impl<C: ConsumerBarrier> crate::sequencers::sealed::Sealed for MultiPublisherSequencer<C> {}
 
 #[derive(Clone)]
 pub(crate) struct MultiPubSeqGate {
     slot_states: Arc<U32SlotStates>,
 }
 
-impl PublisherSeqGate for MultiPubSeqGate {
+impl ProducerBarrier for MultiPubSeqGate {
     #[inline]
     fn max_published(&self, next_seq: Sequence, end_seq: Sequence) -> SlotState {
         self.slot_states.scan_available_until(next_seq, end_seq)

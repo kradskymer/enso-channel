@@ -517,10 +517,8 @@ fn run_enso_receiver(
                                     received += chunk;
                                     break;
                                 }
-                                Err(enso_channel::errors::TryRecvAtMostError::Empty) => {
-                                    backoff.spin()
-                                }
-                                Err(enso_channel::errors::TryRecvAtMostError::Disconnected) => {
+                                Err(enso_channel::errors::TryRecvError::Empty) => backoff.spin(),
+                                Err(enso_channel::errors::TryRecvError::Disconnected) => {
                                     return;
                                 }
                             }

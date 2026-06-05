@@ -19,10 +19,11 @@
 //! let (mut tx, mut rx1) = mpmc::channel::<u64>(64);
 //! let mut rx2 = rx1.clone();
 //!
-//! tx.try_send(1)?;
-//! let _v = *rx1.try_recv()?;
+//! tx.try_send(1).unwrap();
+//! let _v = *rx1.try_recv().unwrap();
 //! let _ = rx2.try_recv_at_most(8); // competing worker
-//! # Ok(()) }
+//! # Ok(())
+//! }
 //! ```
 
 use std::sync::Arc;

@@ -70,6 +70,10 @@ impl<T> RingBuffer<T> {
         // SAFETY: index is always in the valid range by a masking operation
         unsafe { &*self.slots.get_unchecked(index).get() }
     }
+
+    pub(crate) fn meta(&self) -> RingBufferMeta {
+        self.ring_meta
+    }
 }
 
 #[derive(Clone, Copy)]

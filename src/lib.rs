@@ -121,7 +121,7 @@ mod cursor;
 
 pub(crate) use cursor::Cursor;
 pub(crate) use sequence::Sequence;
-pub(crate) use sequencers::{ConsumerSeqGate, PublisherSeqGate};
+pub(crate) use sequencers::ProducerBarrier;
 
 pub(crate) use ringbuffer::{RingBuffer, RingBufferMeta};
 

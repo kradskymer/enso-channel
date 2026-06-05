@@ -14,7 +14,7 @@ pub trait BroadcastAdapter<const N: usize> {
     type Receiver;
 
     fn channel_broadcast(capacity: usize) -> (Self::Sender, [Self::Receiver; N]);
-    fn try_send(sender: &mut Self::Sender, item: u32) -> Result<(), TrySendError>;
+    fn try_send(sender: &mut Self::Sender, item: u32) -> Result<(), TrySendError<u32>>;
     fn try_recv(receiver: &mut Self::Receiver) -> Result<u32, TryRecvError>;
 }
 

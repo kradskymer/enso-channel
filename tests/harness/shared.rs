@@ -3,7 +3,7 @@
 //! These traits allow generic contract tests to be written once and applied
 //! to all channel variants that implement the required capabilities.
 
-use enso_channel::errors::{TryRecvAtMostError, TryRecvError, TrySendAtMostError, TrySendError};
+use enso_channel::errors::{TryRecvError, TrySendAtMostError, TrySendError};
 
 /// Core channel trait that all test harnesses must implement.
 pub trait Channel {
@@ -27,17 +27,7 @@ pub trait Channel {
 
     fn channel(capacity: usize) -> (Self::Sender, Self::Receiver);
 
-    fn try_send(sender: &mut Self::Sender, item: u32) -> Result<(), TrySendError>;
-
-    /// Try to claim exactly `n` slots, returning a send batch guard on success.
-    fn try_send_many_batch<'a>(
-        sender: &'a mut Self::Sender,
-        n: usize,
-        factory: fn() -> u32,
-    ) -> Result<Self::SendBatch<'a>, TrySendError>;
-
-    // Try to send n items from the provided slice and n == items.len()
-    fn try_send_many(sender: &mut Self::Sender, items: &[u32]) -> Result<(), TrySendError>;
+    fn try_send(sender: &mut Self::Sender, item: u32) -> Result<(), TrySendError<u32>>;
 
     // Try to send at most n items from the provided slice.
     fn try_send_at_most(
@@ -45,30 +35,25 @@ pub trait Channel {
         items: &[u32],
     ) -> Result<usize, TrySendAtMostError>;
 
-    fn try_recv(receiver: &mut Self::Receiver) -> Result<u32, TryRecvError>;
-
-    /// Try to receive exactly `n` items, returning a batch guard on success.
-    fn try_recv_many_batch<'a>(
-        receiver: &'a mut Self::Receiver,
+    fn try_send_at_most_batch<'a>(
+        sender: &'a mut Self::Sender,
         n: usize,
-    ) -> Result<Self::RecvBatch<'a>, TryRecvError>;
+        factory: fn() -> u32,
+    ) -> Result<Self::SendBatch<'a>, TrySendAtMostError>;
+
+    fn try_recv(receiver: &mut Self::Receiver) -> Result<u32, TryRecvError>;
 
     /// Try to receive up to `limit` items, returning a batch guard on success.
     fn try_recv_at_most_batch<'a>(
         receiver: &'a mut Self::Receiver,
         limit: usize,
-    ) -> Result<Self::RecvBatch<'a>, TryRecvAtMostError>;
-
-    /// Convenience wrapper: receive exactly `n` items and collect via `.iter()`.
-    fn try_recv_many(receiver: &mut Self::Receiver, n: usize) -> Result<Vec<u32>, TryRecvError> {
-        Ok(Self::try_recv_many_batch(receiver, n)?.to_vec())
-    }
+    ) -> Result<Self::RecvBatch<'a>, TryRecvError>;
 
     /// Convenience wrapper: receive up to `limit` items and collect via `.iter()`.
     fn try_recv_at_most(
         receiver: &mut Self::Receiver,
         limit: usize,
-    ) -> Result<Vec<u32>, TryRecvAtMostError> {
+    ) -> Result<Vec<u32>, TryRecvError> {
         Ok(Self::try_recv_at_most_batch(receiver, limit)?.to_vec())
     }
 }

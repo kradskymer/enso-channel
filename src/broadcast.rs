@@ -20,8 +20,8 @@
 //! let (mut tx, mut rxs) = broadcast::channel::<u64, 2>(64);
 //! let [mut rx0, mut rx1] = rxs;
 //!
-//! tx.try_send(7)?;
-//! let _a = *rx0.try_recv()?;
+//! tx.try_send(7).unwrap();
+//! let _a = *rx0.try_recv().unwrap();
 //! let _b = *rx1.try_recv()?;
 //! # Ok(()) }
 //! ```
@@ -74,9 +74,7 @@ where
 fn channel_with_ring<T, const N: usize>(
     ring_buffer: Arc<RingBuffer<T>>,
 ) -> (Sender<T, N>, [Receiver<T>; N]) {
-    let capacity = ring_buffer.capacity() as usize;
-    let ring_meta = crate::RingBufferMeta::new(capacity);
-
+    let ring_meta = ring_buffer.meta();
     let consumed: [Arc<crate::Cursor>; N] =
         std::array::from_fn(|_| Arc::new(crate::Cursor::new(crate::Sequence::INIT)));
     let consumer_gate = Arc::new(FanoutConSeqGate::<N>::new(consumed.clone()));

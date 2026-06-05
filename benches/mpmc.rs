@@ -568,8 +568,8 @@ fn run_enso_consumer(
                         received += 1;
                     }
                 }
-                Err(enso_channel::errors::TryRecvAtMostError::Empty) => {}
-                Err(enso_channel::errors::TryRecvAtMostError::Disconnected) => return,
+                Err(enso_channel::errors::TryRecvError::Empty) => {}
+                Err(enso_channel::errors::TryRecvError::Disconnected) => return,
             }
 
             if received > 0 {

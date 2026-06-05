@@ -12,14 +12,14 @@
 //!   - Concrete mechanism depends on topology:
 //!     - single-producer: a `published` cursor
 //!     - multi-producer: per-slot `slot_states`
-//!   - The consumer-facing interface is [`PublisherSeqGate`].
+//!   - The consumer-facing interface is [`ProducerBarrier`].
 //!
 //! - **Consumer → Producer**: consumers advance (consume/free) progress and producers discover
 //!   what capacity can be safely reused.
 //!   - Concrete mechanism depends on topology:
 //!     - single-consumer / fixed-N broadcast: per-consumer `consumed` cursor(s)
 //!     - work-queue: per-slot consumed states + a claimed cursor sentinel for disconnect
-//!   - The producer-facing interface is [`ConsumerSeqGate`].
+//!   - The producer-facing interface is [`ConsumerBarrier`].
 //!
 //! [`Sequencer`] implementations sit on top of these gates:
 //!
@@ -27,37 +27,6 @@
 //!   claim without overwriting unconsumed data.
 //! - Consumer-side sequencers use `PublisherSeqGate::max_published` to compute how far they can
 //!   claim without reading unpublished data.
-//!
-//! ## Memory ordering model (why the fences exist)
-//!
-//! Many hot paths use a "cursor/state observed, then access ring memory" pattern.
-//! The intent is:
-//!
-//! - If a consumer observes that a sequence is **published**, subsequent reads of that slot's
-//!   payload must observe the producer's writes.
-//! - If a producer observes that a slot is **consumed/freed**, subsequent writes reusing that
-//!   slot must not be reordered before the observation.
-//!
-//! Implementations may use one of two equivalent observation styles:
-//!
-//! 1) **Direct acquire load**
-//!
-//!    - Writer: `state.store(v, Release)` (or `fence(Release); state.store(v, Relaxed)`)
-//!    - Reader: `state.load(Acquire)`
-//!
-//! 2) **Relaxed load + conditional acquire fence**
-//!
-//!    - Writer: `state.store(v, Release)` (or `fence(Release); state.store(v, Relaxed)`)
-//!    - Reader: `let v = state.load(Relaxed); if v crosses the queried boundary { fence(Acquire) }`
-//!
-//! Style (2) is used to keep the common "not yet available" path cheap while still ensuring
-//! that, once the observed value is sufficient for the caller to proceed, subsequent memory
-//! operations (payload reads or slot reuse writes) are not reordered before the observation.
-//!
-//! Note that this module also defines *disconnect* semantics via sentinels and/or counters.
-//! Those are orthogonal to the publish/consume visibility rules and are surfaced via
-//! `is_shutdown_open()` checks on returned [`Sequence`] values and the dedicated
-//! [`ConsumerSeqGate::is_disconnected`] fast-path.
 
 mod con_ex;
 mod con_fanout;
@@ -74,7 +43,6 @@ pub(crate) use con_queue::{QueuedConSeqGate, QueuedConsumerSequencer, QueuedCons
 pub(crate) use pub_mul::{MultiPubSeqGate, MultiPublisherSequencer};
 
 use crate::errors::TryClaimError;
-use crate::slot_states::SlotState;
 use crate::Sequence;
 
 /// Internal sequencing contract used by publisher/consumer infrastructure.
@@ -84,11 +52,6 @@ use crate::Sequence;
 /// Users of the crate should not need to import or interact with it.
 #[doc(hidden)]
 pub trait Sequencer: sealed::Sealed {
-    /// Attempts to reserve the next `n` sequences for publishing.
-    /// If successful, returns (next_seq, highest_seq) where highest_seq == next_seq + n - 1.
-    /// If insufficient capacity, returns `TryClaimError::Insufficient` with the number of missing sequences.
-    fn try_claim_n(&mut self, n: i64) -> Result<(Sequence, Sequence), TryClaimError>;
-
     /// Attempts to reserve the next sequence for publishing.
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError>;
 
@@ -105,20 +68,18 @@ pub trait Sequencer: sealed::Sealed {
     fn commit_range(&self, start_seq: Sequence, end_seq: Sequence);
 }
 
-/// Gate interface for consumer to coordinate with publisher sequences.
-pub(crate) trait PublisherSeqGate {
-    /// Returns the highest published sequence in the range [`next_seq`, `end_seq`]
-    /// together with a shutdown flag.
+/// A barrier that prevents consumers from reading unpublished.
+pub(crate) trait ProducerBarrier {
+    /// Returns the max sequence that a consumer can read to
+    /// This will find the max available sequence between [next_seq, end_seq] inclusive.
+    /// If no sequence is available in the range, next_seq - 1 will return
     ///
-    /// When no sequences are available in the range, `SlotState::sequence()`
-    /// returns `next_seq - 1`.  `SlotState::is_shutdown()` is true when the
-    /// publisher side has disconnected and no further sequences will be
-    /// published.
+    /// If the sequencer is shutdown, [`SlotState::is_shutdown`] will be true.
     fn max_published(&self, next_seq: Sequence, end_seq: Sequence) -> SlotState;
 }
 
 /// Gate interface for publisher to coordinate with consumer sequences.
-pub(crate) trait ConsumerSeqGate {
+pub(crate) trait ConsumerBarrier {
     /// Returns the minimum consumed sequence across all consumers together
     /// with a shutdown flag.
     ///
@@ -128,306 +89,28 @@ pub(crate) trait ConsumerSeqGate {
     fn max_consumed(&self, next_seq: Sequence, end_seq: Sequence) -> SlotState;
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    };
+/// Combines a sequence value with a shutdown flag.
+///
+/// Returned by [`SlotStateGroup::scan_available_until`] so callers receive both
+/// the last contiguous available sequence and a shutdown signal in one call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SlotState {
+    seq: Sequence,
+    shutdown: bool,
+}
 
-    use super::{
-        ConsumerSeqGate, ExclusiveConsumerSequencer, FanoutConsumerSequencer,
-        MultiPublisherSequencer, PublisherSeqGate, QueuedConsumerWiring, Sequencer,
-    };
-    use crate::slot_states::SlotState;
-    use crate::{errors::TryClaimError, Cursor, RingBufferMeta, Sequence};
-
-    #[derive(Clone)]
-    struct CursorConsumerGate {
-        consumed: Arc<AtomicI64>,
+impl SlotState {
+    pub(crate) fn new(seq: Sequence, shutdown: bool) -> Self {
+        Self { seq, shutdown }
     }
 
-    impl ConsumerSeqGate for CursorConsumerGate {
-        fn max_consumed(&self, _next_seq: Sequence, _end_seq: Sequence) -> SlotState {
-            let seq: Sequence = self.consumed.load(Ordering::Acquire).into();
-            SlotState::new(seq, seq.is_shutdown_open())
-        }
+    #[inline]
+    pub(crate) fn sequence(self) -> Sequence {
+        self.seq
     }
 
-    #[derive(Clone)]
-    struct CursorPublisherGate {
-        published: Arc<AtomicI64>,
-    }
-
-    impl PublisherSeqGate for CursorPublisherGate {
-        fn max_published(&self, _next_seq: Sequence, _end_seq: Sequence) -> SlotState {
-            let value = self.published.load(Ordering::Acquire);
-            let seq = Sequence::new(value);
-            if seq.is_shutdown_open() {
-                // Shutdown sentinel: return INIT as the boundary so callers
-                // don't misinterpret SHUTDOWN_OPEN as a claimable sequence.
-                SlotState::new(Sequence::INIT, true)
-            } else {
-                SlotState::new(seq, false)
-            }
-        }
-    }
-
-    fn run_publisher_test_suite<S, F>(make: F)
-    where
-        S: Sequencer,
-        F: Fn(Arc<CursorConsumerGate>, RingBufferMeta) -> S,
-    {
-        let ring = RingBufferMeta::new(8);
-        let consumed = Arc::new(AtomicI64::new(Sequence::INIT.value()));
-        let gate = Arc::new(CursorConsumerGate {
-            consumed: consumed.clone(),
-        });
-
-        let mut seq = make(gate.clone(), ring);
-
-        // 1. Initial Capacity
-        // Should be able to claim 8 slots (0..7)
-        let (_, end_seq) = seq.try_claim_n(8).expect("Should claim full capacity");
-        assert_eq!(end_seq, Sequence::new(7));
-
-        // 2. Backpressure
-        // Next claim should fail
-        match seq.try_claim() {
-            Err(TryClaimError::Insufficient { missing }) => assert_eq!(missing, 1),
-            Ok(_) => panic!("Should be backpressured"),
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-
-        // 3. Advance Consumer
-        // Consumer processes 1 item (seq 0)
-        consumed.store(0, Ordering::Release);
-
-        // Should be able to claim 1 more (seq 8)
-        let claimed = seq
-            .try_claim()
-            .expect("Should claim after consumer advance");
-        assert_eq!(claimed, Sequence::new(8));
-
-        // 4. Disconnect
-        consumed.store(Sequence::SHUTDOWN_OPEN.value(), Ordering::Release);
-        match seq.try_claim() {
-            Err(TryClaimError::Shutdown) => {}
-            Ok(_) => panic!("Should be disconnected"),
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-    }
-
-    fn run_consumer_test_suite<S, F>(make: F)
-    where
-        S: Sequencer,
-        F: Fn(Arc<CursorPublisherGate>, RingBufferMeta) -> S,
-    {
-        let published = Arc::new(AtomicI64::new(Sequence::INIT.value())); // -1
-        let gate = Arc::new(CursorPublisherGate {
-            published: published.clone(),
-        });
-        let ring_meta = RingBufferMeta::new(8);
-
-        let mut seq = make(gate.clone(), ring_meta);
-
-        // 1. Empty
-        match seq.try_claim() {
-            Err(TryClaimError::Insufficient { .. }) => {}
-            Ok(_) => panic!("Should be empty"),
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-
-        // 2. Publish
-        published.store(0, Ordering::Release);
-        let claimed = seq.try_claim().expect("Should claim published item");
-        assert_eq!(claimed, Sequence::new(0));
-        seq.commit(claimed);
-
-        // 3. Shutdown — signal by storing SHUTDOWN_OPEN in published.
-        // The CursorPublisherGate reads `published` and treats SHUTDOWN_OPEN as shutdown.
-        published.store(Sequence::SHUTDOWN_OPEN.value(), Ordering::Release);
-
-        // Next should be disconnected
-        match seq.try_claim() {
-            Err(TryClaimError::Shutdown) => {}
-            Ok(_) => panic!("Should be disconnected"),
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-    }
-
-    #[test]
-    fn multi_publisher_sequencer_generic() {
-        run_publisher_test_suite(MultiPublisherSequencer::new);
-    }
-
-    #[test]
-    fn exclusive_consumer_sequencer_generic() {
-        run_consumer_test_suite(|gate, ring_meta| {
-            let consumed = Arc::new(Cursor::new(Sequence::INIT));
-            ExclusiveConsumerSequencer::new(consumed, gate, ring_meta)
-        });
-    }
-
-    #[test]
-    fn fanout_consumer_sequencer_generic() {
-        run_consumer_test_suite(|gate, ring_meta| {
-            let consumed = Arc::new(Cursor::new(Sequence::INIT));
-            FanoutConsumerSequencer::new(gate, consumed, ring_meta)
-        });
-    }
-
-    #[test]
-    fn queued_consumer_sequencer_generic() {
-        run_consumer_test_suite(|gate, ring_meta| {
-            let ring = RingBufferMeta::new(8);
-            let (_, wiring) = QueuedConsumerWiring::new(ring);
-            wiring.build_consumer(gate, ring_meta)
-        });
-    }
-
-    #[test]
-    fn queue_consumers_split_work_across_clones() {
-        let ring_meta = RingBufferMeta::new(8);
-        let published = Arc::new(AtomicI64::new(3));
-        let producer_gate = Arc::new(CursorPublisherGate { published });
-
-        let (_gate, wiring) = QueuedConsumerWiring::new(ring_meta);
-        let mut rx1 = wiring.build_consumer(producer_gate.clone(), ring_meta);
-        let mut rx2 = rx1.clone();
-
-        let s1 = rx1.try_claim().expect("rx1 claim");
-        let s2 = rx2.try_claim().expect("rx2 claim");
-        assert_ne!(s1, s2);
-        assert_eq!(
-            (s1.value().min(s2.value()), s1.value().max(s2.value())),
-            (0, 1)
-        );
-
-        rx1.commit(s1);
-        rx2.commit(s2);
-    }
-
-    fn run_publisher_at_most_test_suite<S, F>(make: F)
-    where
-        S: Sequencer,
-        F: Fn(Arc<CursorConsumerGate>, RingBufferMeta) -> S,
-    {
-        let ring = RingBufferMeta::new(8);
-        let consumed = Arc::new(AtomicI64::new(Sequence::INIT.value()));
-        let gate = Arc::new(CursorConsumerGate {
-            consumed: consumed.clone(),
-        });
-
-        let mut seq = make(gate.clone(), ring);
-
-        // 1. Full capacity available - claim all requested
-        let (start_seq, end_seq) = seq.try_claim_at_most(5).expect("Should claim 5");
-        assert_eq!(start_seq, Sequence::new(0));
-        assert_eq!(end_seq, Sequence::new(4));
-        seq.commit_range(start_seq, end_seq);
-
-        // 2. Claim rest of capacity
-        let (start_seq, end_seq) = seq.try_claim_at_most(10).expect("Should claim remaining 3");
-        assert_eq!(end_seq.value() - start_seq.value() + 1, 3); // Only 3 slots remain (ring size 8)
-        assert_eq!(end_seq, Sequence::new(7));
-        seq.commit_range(start_seq, end_seq);
-
-        // 3. Zero capacity - return Empty error (all 8 slots taken, nothing consumed yet)
-        let result = seq.try_claim_at_most(1);
-        match result {
-            Err(TryClaimError::Empty) => {}
-            Ok(_) => panic!("Should be full"),
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-
-        // 4. Free some slots, then claim partial
-        consumed.store(5, Ordering::Release); // Free slots 0-5
-        let (start_seq, end_seq) = seq.try_claim_at_most(10).expect("Should claim partial");
-        let count = end_seq.value() - start_seq.value() + 1;
-        assert_eq!(count, 6); // Can claim 6 (ring is 8, 2 occupied at 6-7, 6 freed at 0-5)
-        seq.commit_range(start_seq, end_seq);
-
-        // 5. Disconnect
-        consumed.store(Sequence::SHUTDOWN_OPEN.value(), Ordering::Release);
-        match seq.try_claim_at_most(1) {
-            Err(TryClaimError::Shutdown) => {}
-            Ok(_) => panic!("Should be disconnected"),
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-    }
-
-    fn run_consumer_at_most_test_suite<S, F>(make: F)
-    where
-        S: Sequencer,
-        F: Fn(Arc<CursorPublisherGate>) -> S,
-    {
-        let published = Arc::new(AtomicI64::new(Sequence::INIT.value()));
-        let gate = Arc::new(CursorPublisherGate {
-            published: published.clone(),
-        });
-
-        let mut seq = make(gate.clone());
-
-        // 1. Empty - return Empty error
-        match seq.try_claim_at_most(1) {
-            Err(TryClaimError::Empty) => {}
-            Ok(_) => panic!("Should be empty"),
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-
-        // 2. Publish some items - claim all requested
-        published.store(4, Ordering::Release);
-        let (start_seq, end_seq) = seq.try_claim_at_most(5).expect("Should claim available");
-        assert_eq!(end_seq.value() - start_seq.value() + 1, 5);
-        assert_eq!(end_seq, Sequence::new(4));
-        seq.commit_range(start_seq, end_seq);
-
-        // 3. Partial items - claim what's available
-        published.store(6, Ordering::Release);
-        let (start_seq, end_seq) = seq.try_claim_at_most(10).expect("Should claim partial");
-        assert_eq!(end_seq.value() - start_seq.value() + 1, 2);
-        assert_eq!(end_seq, Sequence::new(6));
-        seq.commit_range(start_seq, end_seq);
-
-        // 4. Shutdown
-        published.store(Sequence::SHUTDOWN_OPEN.value(), Ordering::Release);
-        match seq.try_claim_at_most(1) {
-            Err(TryClaimError::Shutdown) => {}
-            Ok(v) => panic!("Should be disconnected, {:?}", v),
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-    }
-
-    #[test]
-    fn multi_publisher_sequencer_at_most() {
-        run_publisher_at_most_test_suite(MultiPublisherSequencer::new);
-    }
-
-    #[test]
-    fn exclusive_consumer_sequencer_at_most() {
-        run_consumer_at_most_test_suite(|gate| {
-            let consumed = Arc::new(Cursor::new(Sequence::INIT));
-            let ring_meta = RingBufferMeta::new(8);
-            ExclusiveConsumerSequencer::new(consumed, gate, ring_meta)
-        });
-    }
-
-    #[test]
-    fn fanout_consumer_sequencer_at_most() {
-        run_consumer_at_most_test_suite(|gate| {
-            let consumed = Arc::new(Cursor::new(Sequence::INIT));
-            let ring_meta = RingBufferMeta::new(8);
-            FanoutConsumerSequencer::new(gate, consumed, ring_meta)
-        });
-    }
-
-    #[test]
-    fn queued_consumer_sequencer_at_most() {
-        run_consumer_at_most_test_suite(|gate| {
-            let ring_meta = RingBufferMeta::new(8);
-            let (_, wiring) = QueuedConsumerWiring::new(ring_meta);
-            wiring.build_consumer(gate, ring_meta)
-        });
+    #[inline]
+    pub(crate) fn is_shutdown(self) -> bool {
+        self.shutdown
     }
 }

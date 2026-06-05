@@ -3,7 +3,7 @@
 //! They are parameterized by channel type and can be applied to any implementation
 //! that satisfies the required trait bounds.
 
-use enso_channel::errors::{TryRecvAtMostError, TryRecvError, TrySendAtMostError, TrySendError};
+use enso_channel::errors::{TryRecvError, TrySendAtMostError, TrySendError};
 
 use super::shared::{Channel, RecvBatchU32, SendBatchU32};
 
@@ -47,8 +47,8 @@ pub fn contract_capacity_backpressure<C: Channel>() {
 
     // Next send should fail with InsufficientCapacity
     match C::try_send(&mut tx, 99) {
-        Err(TrySendError::InsufficientCapacity { missing }) => {
-            assert_eq!(missing, 1, "should be missing exactly 1 slot");
+        Err(TrySendError::Full(i)) => {
+            assert_eq!(i, 99, "should be missing exactly 1 slot");
         }
         Err(e) => panic!("expected InsufficientCapacity, got {e:?}"),
         Ok(()) => panic!("expected InsufficientCapacity, but send succeeded"),
@@ -61,20 +61,6 @@ pub fn contract_capacity_backpressure<C: Channel>() {
     C::try_send(&mut tx, 99).expect("send after freeing slot should succeed");
 
     let items = vec![0, 2];
-    match C::try_send_many(&mut tx, &items) {
-        Ok(_) => panic!("expected InsufficientCapacity on batch send, but succeeded"),
-        Err(TrySendError::Disconnected) => {
-            panic!("expected InsufficientCapacity on batch send, got Disconnected");
-        }
-        Err(TrySendError::InsufficientCapacity { missing }) => {
-            assert_eq!(
-                missing,
-                items.len(),
-                "should be missing exactly {} slots",
-                items.len()
-            );
-        }
-    }
 
     match C::try_send_at_most(&mut tx, &items) {
         Err(TrySendAtMostError::Full) => {}
@@ -89,23 +75,13 @@ pub fn contract_recv_empty<C: Channel>() {
     let (_tx, mut rx) = C::channel(8);
 
     match C::try_recv(&mut rx) {
-        Err(TryRecvError::InsufficientItems { missing }) => {
-            assert_eq!(missing, 1);
-        }
+        Err(TryRecvError::Empty) => {}
         Err(e) => panic!("expected InsufficientItems, got {e:?}"),
         Ok(v) => panic!("expected InsufficientItems, got Ok({v})"),
     }
 
-    match C::try_recv_many(&mut rx, 3) {
-        Err(TryRecvError::InsufficientItems { missing }) => {
-            assert_eq!(missing, 3);
-        }
-        Err(e) => panic!("expected InsufficientItems on batch recv, got {e:?}"),
-        Ok(v) => panic!("expected InsufficientItems on batch recv, got Ok({v:?})"),
-    }
-
     match C::try_recv_at_most(&mut rx, 3) {
-        Err(TryRecvAtMostError::Empty) => {}
+        Err(TryRecvError::Empty) => {}
         Err(e) => panic!("expected InsufficientItems on batch recv_at_most, got {e:?}"),
         Ok(v) => panic!("expected InsufficientItems on batch recv_at_most, got Ok({v:?})"),
     }
@@ -129,13 +105,8 @@ pub fn contract_publisher_drop_disconnects_consumers<C: Channel>() {
     drop(tx);
 
     let poll_size = 5; // There should be one failed batch recv attempt
-    let first_poll = C::try_recv_many(&mut rx, poll_size).expect("first poll should succeed");
+    let first_poll = C::try_recv_at_most(&mut rx, poll_size).expect("first poll should succeed");
     assert_eq!(first_poll.len(), poll_size);
-    let second_poll = C::try_recv_many(&mut rx, poll_size);
-    assert!(matches!(
-        second_poll,
-        Err(TryRecvError::InsufficientItems { missing: 2 })
-    ));
 
     // Drain remaining items should succeed
     let remaining_items =
@@ -149,16 +120,8 @@ pub fn contract_publisher_drop_disconnects_consumers<C: Channel>() {
         Ok(v) => panic!("expected Disconnected, got Ok({v})"),
     }
 
-    match C::try_recv_many(&mut rx, poll_size) {
-        Err(TryRecvError::Disconnected) => {}
-        Err(e) => {
-            panic!("expected Disconnected after publisher drop on batch recv, got {e:?}")
-        }
-        Ok(v) => panic!("expected Disconnected on batch recv, got Ok({v:?})"),
-    }
-
     match C::try_recv_at_most(&mut rx, poll_size) {
-        Err(TryRecvAtMostError::Disconnected) => {}
+        Err(TryRecvError::Disconnected) => {}
         Err(e) => {
             panic!("expected Disconnected after publisher drop on batch recv_at_most, got {e:?}")
         }
@@ -181,11 +144,10 @@ where
 
     // No committed items should be observable.
     match C::try_recv(&mut rx) {
-        Err(TryRecvError::InsufficientItems { missing: 1 }) => {}
+        Err(TryRecvError::Empty) => {}
         Err(TryRecvError::Disconnected) => {
             panic!("expected InsufficientItems before dropping sender")
         }
-        Err(e) => panic!("expected InsufficientItems, got {e:?}"),
         Ok(v) => panic!("expected InsufficientItems, got Ok({v})"),
     }
 
@@ -197,13 +159,8 @@ where
         other => panic!("expected Disconnected after publisher drop, got {other:?}"),
     }
 
-    match C::try_recv_many(&mut rx, 1) {
-        Err(TryRecvError::Disconnected) => {}
-        other => panic!("expected Disconnected on recv_many after publisher drop, got {other:?}"),
-    }
-
     match C::try_recv_at_most(&mut rx, 1) {
-        Err(TryRecvAtMostError::Disconnected) => {}
+        Err(TryRecvError::Disconnected) => {}
         other => {
             panic!("expected Disconnected on recv_at_most after publisher drop, got {other:?}")
         }
@@ -227,21 +184,15 @@ pub fn contract_consumer_drop_disconnects_publishers<C: Channel>() {
     let val = C::try_recv(&mut rx).expect("should not panic");
     assert_eq!(val, 0);
 
-    assert!(C::try_send_many(&mut tx, &[1, 2, 3]).is_ok());
+    assert!(C::try_send_at_most(&mut tx, &[1, 2, 3]).is_ok());
     // Drop the last receiver
     drop(rx);
 
     // Following Send should return Disconnected
     match C::try_send(&mut tx, 1) {
-        Err(TrySendError::Disconnected) => {}
+        Err(TrySendError::Disconnected(_)) => {}
         Err(e) => panic!("expected Disconnected after consumer drop, got {e:?}"),
         Ok(()) => panic!("expected Disconnected, but send succeeded"),
-    }
-
-    match C::try_send_many(&mut tx, &[1, 2, 3]) {
-        Err(TrySendError::Disconnected) => {}
-        Err(e) => panic!("expected Disconnected after consumer drop on batch send, got {e:?}"),
-        Ok(()) => panic!("expected Disconnected on batch send, but succeeded"),
     }
 
     match C::try_send_at_most(&mut tx, &[1, 2, 3]) {
@@ -267,8 +218,8 @@ pub fn contract_claim_exceeds_capacity<C: Channel>() {
 
     // Attempting to send when full should fail
     match C::try_send(&mut tx, 99) {
-        Err(TrySendError::InsufficientCapacity { missing }) => {
-            assert_eq!(missing, 1, "should be missing exactly 1 slot");
+        Err(TrySendError::Full(i)) => {
+            assert_eq!(i, 1);
         }
         Err(e) => panic!("expected InsufficientCapacity, got {e:?}"),
         Ok(()) => panic!("expected InsufficientCapacity, but send succeeded"),
@@ -280,27 +231,9 @@ pub fn contract_claim_exceeds_capacity<C: Channel>() {
     }
 
     let items_to_send = vec![0; capacity + 1];
-    // Attempting to send more than capacity should fail
-    match C::try_send_many(&mut tx, &items_to_send) {
-        Err(TrySendError::InsufficientCapacity { missing }) => {
-            assert_eq!(missing, 1);
-        }
-        Err(e) => panic!("expected InsufficientCapacity on batch claim, got {e:?}"),
-        Ok(_) => panic!("expected InsufficientCapacity on batch claim, but succeeded"),
-    }
-
     let actual_sent =
         C::try_send_at_most(&mut tx, &items_to_send).expect("send should fit the capacity");
     assert_eq!(actual_sent, capacity, "should send up to capacity");
-
-    // Attempting to recv more than capacity should fail
-    match C::try_recv_many(&mut rx, capacity + 1) {
-        Err(TryRecvError::InsufficientItems { missing }) => {
-            assert_eq!(missing, 1);
-        }
-        Err(e) => panic!("expected InsufficientItems on batch claim, got {e:?}"),
-        Ok(_) => panic!("expected InsufficientItems on batch claim, but succeeded"),
-    }
 
     let actual_recv = C::try_recv_at_most(&mut rx, capacity + 1)
         .expect("recv should fit the capacity")
@@ -323,14 +256,14 @@ pub fn contract_send_batch_drop_fills_with_factory_and_commits<C: Channel>() {
 
     let (mut tx, mut rx) = C::channel(8);
 
-    let mut batch = C::try_send_many_batch(&mut tx, 4, factory).expect("claim should succeed");
+    let mut batch = C::try_send_at_most_batch(&mut tx, 4, factory).expect("claim should succeed");
     assert_eq!(batch.capacity(), 4);
 
     batch.write_next(1);
     batch.write_next(2);
     drop(batch);
 
-    let got = C::try_recv_many(&mut rx, 4).expect("recv should observe committed range");
+    let got = C::try_recv_at_most(&mut rx, 4).expect("recv should observe committed range");
     assert_eq!(got, vec![1, 2, 9, 9]);
 }
 
@@ -346,7 +279,7 @@ pub fn contract_recv_many_batch_iter_yields_fifo<C: Channel>() {
         C::try_send(&mut tx, i).expect("send should succeed");
     }
 
-    let batch = C::try_recv_many_batch(&mut rx, 5).expect("recv_many should succeed");
+    let batch = C::try_recv_at_most(&mut rx, 5).expect("recv_many should succeed");
     let got = batch.to_vec();
     assert_eq!(got, vec![0, 1, 2, 3, 4]);
 }
@@ -363,11 +296,11 @@ pub fn contract_recv_batch_holds_capacity_until_commit<C: Channel>() {
         C::try_send(&mut tx, i).expect("fill within capacity should succeed");
     }
 
-    let batch = C::try_recv_many_batch(&mut rx, 2).expect("recv_many should succeed");
+    let batch = C::try_recv_at_most_batch(&mut rx, 2).expect("recv_many should succeed");
 
     match C::try_send(&mut tx, 99) {
-        Err(TrySendError::InsufficientCapacity { missing }) => {
-            assert_eq!(missing, 1, "expected missing=1 while batch is live");
+        Err(TrySendError::Full(i)) => {
+            assert_eq!(i, 99, "expected missing=1 while batch is live");
         }
         Err(e) => panic!("expected InsufficientCapacity while batch is live, got {e:?}"),
         Ok(()) => panic!("expected backpressure while batch is live"),
@@ -387,7 +320,7 @@ pub fn contract_recv_batch_finish_commits_immediately<C: Channel>() {
         C::try_send(&mut tx, i).expect("fill within capacity should succeed");
     }
 
-    let batch = C::try_recv_many_batch(&mut rx, 2).expect("recv_many should succeed");
+    let batch = C::try_recv_at_most_batch(&mut rx, 2).expect("recv_many should succeed");
     batch.finish();
 
     C::try_send(&mut tx, 123).expect("send after batch.finish() should succeed");
@@ -413,9 +346,9 @@ pub fn contract_recv_batch_drop_commits_without_iteration<C: Channel>() {
         C::try_send(&mut tx, i).unwrap();
     }
 
-    let batch = C::try_recv_many_batch(&mut rx, 2).unwrap();
+    let batch = C::try_recv_at_most_batch(&mut rx, 2).unwrap();
     drop(batch);
 
-    let batch2 = C::try_recv_many_batch(&mut rx, 2).unwrap();
+    let batch2 = C::try_recv_at_most_batch(&mut rx, 2).unwrap();
     assert_eq!(batch2.to_vec(), vec![2, 3]);
 }

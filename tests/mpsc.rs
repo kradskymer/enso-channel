@@ -28,37 +28,13 @@ impl Channel for MpscChan {
     fn try_send(
         sender: &mut Self::Sender,
         item: u32,
-    ) -> Result<(), enso_channel::errors::TrySendError> {
+    ) -> Result<(), enso_channel::errors::TrySendError<u32>> {
         sender.try_send(item)
-    }
-
-    fn try_send_many_batch<'a>(
-        sender: &'a mut Self::Sender,
-        n: usize,
-        factory: fn() -> u32,
-    ) -> Result<Self::SendBatch<'a>, enso_channel::errors::TrySendError> {
-        sender.try_send_many(n, factory)
     }
 
     fn try_recv(receiver: &mut Self::Receiver) -> Result<u32, enso_channel::errors::TryRecvError> {
         let guard = receiver.try_recv()?;
         Ok(*guard)
-    }
-
-    fn try_recv_many_batch<'a>(
-        receiver: &'a mut Self::Receiver,
-        n: usize,
-    ) -> Result<Self::RecvBatch<'a>, enso_channel::errors::TryRecvError> {
-        receiver.try_recv_many(n)
-    }
-
-    fn try_send_many(
-        sender: &mut Self::Sender,
-        items: &[u32],
-    ) -> Result<(), enso_channel::errors::TrySendError> {
-        let mut batch = sender.try_send_many(items.len(), || 0)?;
-        batch.write_exact(items.iter().copied());
-        Ok(())
     }
 
     fn try_send_at_most(
@@ -71,25 +47,23 @@ impl Channel for MpscChan {
         Ok(n)
     }
 
+    fn try_send_at_most_batch<'a>(
+        sender: &'a mut Self::Sender,
+        n: usize,
+        factory: fn() -> u32,
+    ) -> Result<Self::SendBatch<'a>, enso_channel::errors::TrySendAtMostError> {
+        sender.try_send_at_most(n, factory)
+    }
+
     fn try_recv_at_most_batch<'a>(
         receiver: &'a mut Self::Receiver,
         limit: usize,
-    ) -> Result<Self::RecvBatch<'a>, enso_channel::errors::TryRecvAtMostError> {
+    ) -> Result<Self::RecvBatch<'a>, enso_channel::errors::TryRecvError> {
         receiver.try_recv_at_most(limit)
     }
 }
 
-impl h::MpscChannel for MpscChan {
-    fn try_send_batch_write_exact(
-        sender: &mut Self::Sender,
-        items: &[u32],
-    ) -> Result<(), enso_channel::errors::TrySendError> {
-        let mut batch = sender.try_send_many(items.len(), || 0)?;
-        batch.write_exact(items.iter().copied());
-        batch.finish();
-        Ok(())
-    }
-}
+impl h::MpscChannel for MpscChan {}
 
 impl h::CloneSender for MpscChan {
     fn clone_sender(sender: &Self::Sender) -> Self::Sender {
@@ -105,7 +79,7 @@ impl harness::contracts::InduceUncommittedSend for MpscChan {
 
         let result = catch_unwind(AssertUnwindSafe(|| {
             let _batch = sender
-                .try_send_many(n, panic_factory)
+                .try_send_at_most(n, panic_factory)
                 .expect("claim should succeed");
             // Drop triggers filling via factory, which panics before commit.
         }));
@@ -164,11 +138,6 @@ generate_contract_tests_prefixed!(
 // ============================================================================
 // MPSC-specific tests
 // ============================================================================
-
-#[test]
-fn mpsc_send_batch_write_exact() {
-    h::send_batch_write_exact::<MpscChan>();
-}
 
 #[test]
 fn mpsc_sender_is_cloneable() {

@@ -85,13 +85,13 @@ where
                 loop {
                     match C::try_send(&mut tx, i) {
                         Ok(()) => break,
-                        Err(TrySendError::InsufficientCapacity { .. }) => {
+                        Err(TrySendError::Full(i)) => {
                             if start.elapsed() > TIMEOUT {
                                 panic!("publisher timed out at item {i}");
                             }
                             thread::yield_now();
                         }
-                        Err(TrySendError::Disconnected) => {
+                        Err(TrySendError::Disconnected(_)) => {
                             panic!("publisher disconnected at item {i}");
                         }
                     }
@@ -109,7 +109,7 @@ where
                         received.push(v);
                         last_progress = Instant::now();
                     }
-                    Err(TryRecvError::InsufficientItems { .. }) => {
+                    Err(TryRecvError::Empty) => {
                         if last_progress.elapsed() > TIMEOUT {
                             panic!("consumer timed out. received: {}", received.len());
                         }
@@ -170,7 +170,7 @@ where
                         received[publisher_id].push(item);
                         last_progress = Instant::now();
                     }
-                    Err(TryRecvError::InsufficientItems { .. }) => {
+                    Err(TryRecvError::Empty) => {
                         if last_progress.elapsed() > TIMEOUT {
                             panic!("consumer timed out");
                         }
@@ -200,13 +200,13 @@ where
                         loop {
                             match C::try_send(&mut tx, value) {
                                 Ok(()) => break,
-                                Err(TrySendError::InsufficientCapacity { .. }) => {
+                                Err(TrySendError::Full(_)) => {
                                     if start.elapsed() > TIMEOUT {
                                         panic!("publisher {publisher_id} timed out at item {i}");
                                     }
                                     thread::yield_now();
                                 }
-                                Err(TrySendError::Disconnected) => {
+                                Err(TrySendError::Disconnected(_)) => {
                                     panic!("publisher {publisher_id} disconnected at item {i}");
                                 }
                             }
@@ -275,7 +275,7 @@ where
                                 received.push(v);
                                 last_progress = Instant::now();
                             }
-                            Err(TryRecvError::InsufficientItems { .. }) => {
+                            Err(TryRecvError::Empty) => {
                                 if last_progress.elapsed() > TIMEOUT {
                                     panic!("consumer timed out");
                                 }
@@ -303,13 +303,13 @@ where
             loop {
                 match C::try_send(&mut tx, i) {
                     Ok(()) => break,
-                    Err(TrySendError::InsufficientCapacity { .. }) => {
+                    Err(TrySendError::Full(_)) => {
                         if start.elapsed() > TIMEOUT {
                             panic!("publisher timed out at item {i}");
                         }
                         thread::yield_now();
                     }
-                    Err(TrySendError::Disconnected) => {
+                    Err(TrySendError::Disconnected(_)) => {
                         panic!("publisher disconnected at item {i}");
                     }
                 }
@@ -375,7 +375,7 @@ where
                                 received.push(v);
                                 last_progress = Instant::now();
                             }
-                            Err(TryRecvError::InsufficientItems { .. }) => {
+                            Err(TryRecvError::Empty) => {
                                 if last_progress.elapsed() > TIMEOUT {
                                     panic!("consumer timed out");
                                 }
@@ -407,13 +407,13 @@ where
                         loop {
                             match C::try_send(&mut tx, value) {
                                 Ok(()) => break,
-                                Err(TrySendError::InsufficientCapacity { .. }) => {
+                                Err(TrySendError::Full(i)) => {
                                     if start.elapsed() > TIMEOUT {
                                         panic!("publisher {publisher_id} timed out at item {i}");
                                     }
                                     thread::yield_now();
                                 }
-                                Err(TrySendError::Disconnected) => {
+                                Err(TrySendError::Disconnected(_)) => {
                                     panic!("publisher {publisher_id} disconnected at item {i}");
                                 }
                             }

@@ -29,16 +29,8 @@ impl Channel for MpmcChan {
     fn try_send(
         sender: &mut Self::Sender,
         item: u32,
-    ) -> Result<(), enso_channel::errors::TrySendError> {
+    ) -> Result<(), enso_channel::errors::TrySendError<u32>> {
         sender.try_send(item)
-    }
-
-    fn try_send_many_batch<'a>(
-        sender: &'a mut Self::Sender,
-        n: usize,
-        factory: fn() -> u32,
-    ) -> Result<Self::SendBatch<'a>, enso_channel::errors::TrySendError> {
-        sender.try_send_many(n, factory)
     }
 
     fn try_recv(receiver: &mut Self::Receiver) -> Result<u32, enso_channel::errors::TryRecvError> {
@@ -46,20 +38,12 @@ impl Channel for MpmcChan {
         Ok(*guard)
     }
 
-    fn try_recv_many_batch<'a>(
-        receiver: &'a mut Self::Receiver,
+    fn try_send_at_most_batch<'a>(
+        sender: &'a mut Self::Sender,
         n: usize,
-    ) -> Result<Self::RecvBatch<'a>, enso_channel::errors::TryRecvError> {
-        receiver.try_recv_many(n)
-    }
-
-    fn try_send_many(
-        sender: &mut Self::Sender,
-        items: &[u32],
-    ) -> Result<(), enso_channel::errors::TrySendError> {
-        let mut batch = sender.try_send_many(items.len(), || 0)?;
-        batch.write_exact(items.iter().copied());
-        Ok(())
+        factory: fn() -> u32,
+    ) -> Result<Self::SendBatch<'a>, enso_channel::errors::TrySendAtMostError> {
+        sender.try_send_at_most(n, factory)
     }
 
     fn try_send_at_most(
@@ -75,7 +59,7 @@ impl Channel for MpmcChan {
     fn try_recv_at_most_batch<'a>(
         receiver: &'a mut Self::Receiver,
         limit: usize,
-    ) -> Result<Self::RecvBatch<'a>, enso_channel::errors::TryRecvAtMostError> {
+    ) -> Result<Self::RecvBatch<'a>, enso_channel::errors::TryRecvError> {
         receiver.try_recv_at_most(limit)
     }
 }
@@ -101,7 +85,7 @@ impl InduceUncommittedSend for MpmcChan {
         }
 
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let _ = sender.try_send_many(n, panic_factory);
+            let _ = sender.try_send_at_most(n, panic_factory);
         }));
 
         assert!(
