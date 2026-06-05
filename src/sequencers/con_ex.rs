@@ -1,32 +1,30 @@
 use std::sync::{atomic::Ordering, Arc};
 
-use crate::sequencers::{Sequencer, SlotState};
+use crate::sequencers::{ConsumerBarrier, Sequencer, SlotState};
 use crate::RingBufferMeta;
-use crate::{errors::TryClaimError, ConsumerSeqGate, Cursor, PublisherSeqGate, Sequence};
+use crate::{errors::TryClaimError, Cursor, ProducerBarrier, Sequence};
 
-pub(crate) struct ExclusiveConsumerSequencer<P: PublisherSeqGate> {
+pub(crate) struct ExclusiveConsumerSequencer<P: ProducerBarrier> {
     consumed: Arc<Cursor>,
-    max_published: Sequence,
     producer_gate: Arc<P>,
     ring_meta: RingBufferMeta,
 }
 
-impl<P: PublisherSeqGate> ExclusiveConsumerSequencer<P> {
+impl<B: ProducerBarrier> ExclusiveConsumerSequencer<B> {
     pub(crate) fn new(
         consumed: Arc<Cursor>,
-        producer_gate: Arc<P>,
+        producer_gate: Arc<B>,
         ring_meta: RingBufferMeta,
     ) -> Self {
         Self {
             consumed,
-            max_published: Sequence::INIT,
             producer_gate,
             ring_meta,
         }
     }
 }
 
-impl<P: PublisherSeqGate> ExclusiveConsumerSequencer<P> {
+impl<P: ProducerBarrier> ExclusiveConsumerSequencer<P> {
     #[inline]
     fn do_commit(&self, seq: Sequence) {
         self.consumed.store(seq.value(), Ordering::Release);
@@ -38,7 +36,7 @@ impl<P: PublisherSeqGate> ExclusiveConsumerSequencer<P> {
     }
 }
 
-impl<P: PublisherSeqGate> Sequencer for ExclusiveConsumerSequencer<P> {
+impl<P: ProducerBarrier> Sequencer for ExclusiveConsumerSequencer<P> {
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
         self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
     }
@@ -49,39 +47,17 @@ impl<P: PublisherSeqGate> Sequencer for ExclusiveConsumerSequencer<P> {
         let start_seq = last_claimed + 1;
         let highest_to_consume = last_claimed + n;
 
-        if highest_to_consume > self.max_published {
-            let state = self
-                .producer_gate
-                .max_published(start_seq, highest_to_consume);
-            self.max_published = state.sequence();
-        }
-
-        if highest_to_consume <= self.max_published {
-            return Ok((start_seq, highest_to_consume));
-        }
-
-        let state = self
+        let max_slot_state = self
             .producer_gate
             .max_published(start_seq, highest_to_consume);
-        self.max_published = state.sequence();
-
-        let end_seq = if state.is_shutdown() {
-            if last_claimed >= self.max_published {
+        let end_seq = max_slot_state.sequence();
+        if end_seq <= last_claimed {
+            if max_slot_state.is_shutdown() {
                 return Err(TryClaimError::Shutdown);
-            }
-
-            let end_seq = self.max_published;
-            if start_seq > end_seq {
+            } else {
                 return Err(TryClaimError::Empty);
             }
-            end_seq
-        } else {
-            if start_seq > self.max_published {
-                return Err(TryClaimError::Empty);
-            }
-            let available = (self.max_published - last_claimed).value().min(limit);
-            last_claimed + available
-        };
+        }
 
         Ok((start_seq, end_seq))
     }
@@ -97,9 +73,9 @@ impl<P: PublisherSeqGate> Sequencer for ExclusiveConsumerSequencer<P> {
     }
 }
 
-impl<P: PublisherSeqGate> crate::sequencers::sealed::Sealed for ExclusiveConsumerSequencer<P> {}
+impl<P: ProducerBarrier> crate::sequencers::sealed::Sealed for ExclusiveConsumerSequencer<P> {}
 
-impl<P: PublisherSeqGate> Drop for ExclusiveConsumerSequencer<P> {
+impl<P: ProducerBarrier> Drop for ExclusiveConsumerSequencer<P> {
     fn drop(&mut self) {
         // Encode consumer disconnect for publishers using the consumed cursor sentinel.
         // After disconnect, publishers must stop producing.
@@ -119,7 +95,7 @@ impl ExclusiveConSeqGate {
     }
 }
 
-impl ConsumerSeqGate for ExclusiveConSeqGate {
+impl ConsumerBarrier for ExclusiveConSeqGate {
     fn max_consumed(&self, _next_seq: crate::Sequence, _end_seq: crate::Sequence) -> SlotState {
         let value = self.consumed.load(Ordering::Acquire);
         let seq = Sequence::new(value);

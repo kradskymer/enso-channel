@@ -1,6 +1,6 @@
 use std::sync::{atomic::Ordering, Arc};
 
-use crate::sequencers::{ConsumerSeqGate, PublisherSeqGate, Sequencer, SlotState};
+use crate::sequencers::{ConsumerBarrier, ProducerBarrier, Sequencer, SlotState};
 use crate::{
     errors::TryClaimError,
     slot_states::{SlotStateGroup, U32SlotStates},
@@ -13,10 +13,9 @@ use crate::{
 /// - Consumers *compete* to claim the next available sequences (each item is delivered once).
 /// - Consumption is committed through per-slot state to reduce contention on the commit path.
 #[derive(Clone)]
-pub(crate) struct QueuedConsumerSequencer<P: PublisherSeqGate> {
+pub(crate) struct QueuedConsumerSequencer<B: ProducerBarrier> {
     shared_state: Arc<QueuedSharedState>,
-    max_published: Sequence,
-    publisher_gate: Arc<P>,
+    publisher_gate: Arc<B>,
     ring_meta: RingBufferMeta,
 }
 
@@ -45,11 +44,11 @@ impl QueuedConsumerWiring {
         (consumer_gate, Self { shared_state })
     }
 
-    pub(crate) fn build_consumer<P: PublisherSeqGate>(
+    pub(crate) fn build_consumer<B: ProducerBarrier>(
         self,
-        publisher_gate: Arc<P>,
+        publisher_gate: Arc<B>,
         ring_meta: RingBufferMeta,
-    ) -> QueuedConsumerSequencer<P> {
+    ) -> QueuedConsumerSequencer<B> {
         QueuedConsumerSequencer::new(publisher_gate, self.shared_state, ring_meta)
     }
 }
@@ -78,22 +77,21 @@ impl Drop for QueuedSharedState {
     }
 }
 
-impl<P: PublisherSeqGate> QueuedConsumerSequencer<P> {
+impl<B: ProducerBarrier> QueuedConsumerSequencer<B> {
     fn new(
-        publisher_gate: Arc<P>,
+        publisher_gate: Arc<B>,
         shared_state: Arc<QueuedSharedState>,
         ring_meta: RingBufferMeta,
     ) -> Self {
         Self {
             shared_state,
-            max_published: Sequence::INIT,
             publisher_gate,
             ring_meta,
         }
     }
 }
 
-impl<P: PublisherSeqGate> Sequencer for QueuedConsumerSequencer<P> {
+impl<B: ProducerBarrier> Sequencer for QueuedConsumerSequencer<B> {
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
         self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
     }
@@ -105,55 +103,18 @@ impl<P: PublisherSeqGate> Sequencer for QueuedConsumerSequencer<P> {
             let start_seq = last_claimed + 1;
             let highest_to_consume = last_claimed + n;
 
-            // update max_published cached value
-            if highest_to_consume > self.max_published {
-                let state = self
-                    .publisher_gate
-                    .max_published(start_seq, highest_to_consume);
-                self.max_published = state.sequence();
-            }
-
-            // All requested are available
-            if highest_to_consume <= self.max_published {
-                let expected = last_claimed.value();
-                let end_seq = highest_to_consume;
-                match self.shared_state.claimed.compare_exchange(
-                    expected,
-                    end_seq.value(),
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(_) => return Ok((start_seq, end_seq)),
-                    Err(observed) => {
-                        last_claimed = Sequence::new(observed);
-                        continue;
-                    }
-                }
-            }
-
-            // Re-read max_published with shutdown awareness.
-            let state = self
+            let max_available_slot = self
                 .publisher_gate
                 .max_published(start_seq, highest_to_consume);
-            self.max_published = state.sequence();
-
-            let end_seq = if state.is_shutdown() {
-                if last_claimed >= self.max_published {
+            let max_available = max_available_slot.sequence();
+            if last_claimed >= max_available {
+                if max_available_slot.is_shutdown() {
                     return Err(TryClaimError::Shutdown);
-                }
-
-                let end_seq = self.max_published;
-                if start_seq > end_seq {
+                } else {
                     return Err(TryClaimError::Empty);
                 }
-                end_seq
-            } else {
-                if start_seq > self.max_published {
-                    return Err(TryClaimError::Empty);
-                }
-                let available = (self.max_published - last_claimed).value().min(limit);
-                last_claimed + available
-            };
+            }
+            let end_seq = max_available;
 
             // Atomically advance the claimed cursor to the computed end sequence.
             // This mirrors the full-claim path above and prevents returning a claimed
@@ -188,7 +149,7 @@ impl<P: PublisherSeqGate> Sequencer for QueuedConsumerSequencer<P> {
     }
 }
 
-impl<P: PublisherSeqGate> crate::sequencers::sealed::Sealed for QueuedConsumerSequencer<P> {}
+impl<B: ProducerBarrier> crate::sequencers::sealed::Sealed for QueuedConsumerSequencer<B> {}
 
 #[derive(Clone)]
 pub(crate) struct QueuedConSeqGate {
@@ -205,7 +166,7 @@ impl QueuedConSeqGate {
     }
 }
 
-impl ConsumerSeqGate for QueuedConSeqGate {
+impl ConsumerBarrier for QueuedConSeqGate {
     fn max_consumed(&self, next_seq: Sequence, end_seq: Sequence) -> SlotState {
         // To determine if sequences [next_seq, end_seq] can be written, we need to check
         // if the previous occupants of those slots have been consumed.

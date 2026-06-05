@@ -74,9 +74,7 @@ where
 fn channel_with_ring<T, const N: usize>(
     ring_buffer: Arc<RingBuffer<T>>,
 ) -> (Sender<T, N>, [Receiver<T>; N]) {
-    let capacity = ring_buffer.capacity() as usize;
-    let ring_meta = crate::RingBufferMeta::new(capacity);
-
+    let ring_meta = ring_buffer.meta();
     let consumed: [Arc<crate::Cursor>; N] =
         std::array::from_fn(|_| Arc::new(crate::Cursor::new(crate::Sequence::INIT)));
     let consumer_gate = Arc::new(FanoutConSeqGate::<N>::new(consumed.clone()));

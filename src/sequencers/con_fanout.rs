@@ -2,31 +2,27 @@ use std::sync::{atomic::Ordering, Arc};
 
 use crate::{
     errors::TryClaimError,
-    sequencers::{Sequencer, SlotState},
-    ConsumerSeqGate, Cursor, PublisherSeqGate, RingBufferMeta, Sequence,
+    sequencers::{ConsumerBarrier, ProducerBarrier, Sequencer, SlotState},
+    Cursor, RingBufferMeta, Sequence,
 };
 
-// Removed ConsumerOps adapter
-
-pub(crate) struct FanoutConsumerSequencer<P: PublisherSeqGate> {
+pub(crate) struct FanoutConsumerSequencer<B: ProducerBarrier> {
     consumed: Arc<Cursor>,
-    max_published: Sequence,
-    producer_gate: Arc<P>,
+    producer_gate: Arc<B>,
     ring_meta: RingBufferMeta,
 }
 
-impl<P: PublisherSeqGate> FanoutConsumerSequencer<P> {
-    pub fn new(producer_gate: Arc<P>, consumed: Arc<Cursor>, ring_meta: RingBufferMeta) -> Self {
+impl<B: ProducerBarrier> FanoutConsumerSequencer<B> {
+    pub fn new(producer_gate: Arc<B>, consumed: Arc<Cursor>, ring_meta: RingBufferMeta) -> Self {
         Self {
             consumed,
-            max_published: Sequence::INIT,
             producer_gate,
             ring_meta,
         }
     }
 }
 
-impl<P: PublisherSeqGate> Sequencer for FanoutConsumerSequencer<P> {
+impl<B: ProducerBarrier> Sequencer for FanoutConsumerSequencer<B> {
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
         self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
     }
@@ -36,40 +32,20 @@ impl<P: PublisherSeqGate> Sequencer for FanoutConsumerSequencer<P> {
         let n = limit.min(self.ring_meta.buffer_size());
         let start_seq = last_claimed + 1;
         let highest_to_consume = last_claimed + n;
-
-        if highest_to_consume > self.max_published {
-            let state = self
-                .producer_gate
-                .max_published(start_seq, highest_to_consume);
-            self.max_published = state.sequence();
-        }
-
-        if highest_to_consume <= self.max_published {
-            return Ok((start_seq, highest_to_consume));
-        }
-
-        let state = self
+        let max_available_slot = self
             .producer_gate
             .max_published(start_seq, highest_to_consume);
-        self.max_published = state.sequence();
 
-        let end_seq = if state.is_shutdown() {
-            if last_claimed >= self.max_published {
+        let max_available = max_available_slot.sequence();
+        if max_available <= last_claimed {
+            if max_available_slot.is_shutdown() {
                 return Err(TryClaimError::Shutdown);
+            } else {
+                return Err(TryClaimError::Empty);
             }
+        }
 
-            let end_seq = self.max_published;
-            if start_seq > end_seq {
-                return Err(TryClaimError::Empty);
-            }
-            end_seq
-        } else {
-            if start_seq > self.max_published {
-                return Err(TryClaimError::Empty);
-            }
-            let available = (self.max_published - last_claimed).value().min(limit);
-            last_claimed + available
-        };
+        let end_seq = max_available;
 
         Ok((start_seq, end_seq))
     }
@@ -85,9 +61,9 @@ impl<P: PublisherSeqGate> Sequencer for FanoutConsumerSequencer<P> {
     }
 }
 
-impl<P: PublisherSeqGate> crate::sequencers::sealed::Sealed for FanoutConsumerSequencer<P> {}
+impl<B: ProducerBarrier> crate::sequencers::sealed::Sealed for FanoutConsumerSequencer<B> {}
 
-impl<P: PublisherSeqGate> Drop for FanoutConsumerSequencer<P> {
+impl<B: ProducerBarrier> Drop for FanoutConsumerSequencer<B> {
     fn drop(&mut self) {
         // Mark this consumer as inactive so it no longer gates publishers.
         self.consumed
@@ -106,7 +82,7 @@ impl<const N: usize> FanoutConSeqGate<N> {
     }
 }
 
-impl<const N: usize> ConsumerSeqGate for FanoutConSeqGate<N> {
+impl<const N: usize> ConsumerBarrier for FanoutConSeqGate<N> {
     fn max_consumed(&self, _next_seq: Sequence, _end_seq: Sequence) -> SlotState {
         let mut min_consumed = Sequence::SHUTDOWN_OPEN;
         for i in 0..N {
