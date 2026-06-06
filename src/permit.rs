@@ -192,14 +192,4 @@ pub trait ChanWritePermits<T> {
 
     /// Commit the batch of permits so that the receiver(s) can read the values.
     fn commit(self);
-
-    /// Helper for iterating over the permits in this batch.
-    fn for_each<F>(&mut self, mut f: F)
-    where
-        F: for<'this> FnMut(Self::Permit<'this>),
-    {
-        while let Some(permits) = self.next() {
-            f(permits);
-        }
-    }
 }

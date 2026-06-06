@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 use enso_channel::{ChanWritePermit, ChanWritePermits, ChannelSender};
+=======
+use enso_channel::{ChannelSender, WritePermit, WritePermits};
+>>>>>>> dd4e9c5 (refine examples and readme for the API changes)
 
 fn main() {
     let (mut tx, mut rx) = enso_channel::mpsc::channel(16);

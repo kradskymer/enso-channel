@@ -112,8 +112,8 @@ Unified API across multiple topologies:
 
 | Pattern       | Description                         |
 | ------------- | ----------------------------------- |
-| **SPSC**      | Single Producer, Single Consumer    |
-| **Broadcast** | Lossless Broadcast (fixed‑N fanout) |
+| **MPSC**      | Multiple Producer, Single Consumer    |
+| **Fan-out**   | Lossless Broadcast (fixed‑N fanout) |
 
 ### Key Properties
 
@@ -207,9 +207,14 @@ See [documentation](https://docs.rs/enso-channel) for additional examples.
 
 > **Disconnection is eventual, not transactional.**
 
-A sender may still successfully publish if a receiver is dropped concurrently. Already-committed items may never be observed by the application.
+A sender may still successfully publish if a receiver is dropped concurrently. 
+Already-committed items may never be observed by the application.
 
-#### Graceful shutdown without loss
+For examples:
+1. A sender reserve a permit / batch permit, and the receiver(s) disconnect afterwards.
+2. A sender sends an item successfully, but the receiver(s) disconnect without consumption.
+
+### Graceful shutdown without loss
 
 ```text
 1. Stop producing
@@ -304,7 +309,7 @@ For additional workloads/topologies, run the other bench targets under `benches/
 
 ---
 
-### Broadcast / SPMC scalability (ns/burst)
+### Fan-out / SPMC scalability (ns/burst)
 
 This bench reports **ns/burst**: one producer publishes a burst,
 and the burst is complete when **all** consumers have received it.
@@ -325,7 +330,7 @@ and the burst is complete when **all** consumers have received it.
 - Memory ordering documented in source
 - Loom integration planned / in progress
 
-### Contracts (panic + RAII guards)
+### Contracts (RAII guards)
 
 `enso-channel` is a **lock-free primitive** optimized for fast-path performance.
 It intentionally does **not** impose a heavyweight orchestration layer (parking/blocking/spinning,
@@ -333,10 +338,9 @@ panic recovery, strict state reconciliation) on every operation.
 
 As a result, some behaviors are **caller contracts**:
 
-- **Send batch factories must not panic.** `try_send_at_most*` use a factory
-    to fill any unwritten slots when a send batch is finished or dropped. If that factory panics
-    (including during drop), the claimed range may remain uncommitted and can wedge progress or
-    permanently reduce capacity.
+- **Send batch commit on drop.** `try_send_at_most*` use the sentinel value
+    to fill any unwritten slots when a send batch is finished or dropped.
+    Afterwards the written slots will be published and observed by receiver(s).
 - **Receive guards commit on drop.** Dropping a receive batch commits the full claimed range.
     If you drop it without iterating, unread items are skipped (considered consumed).
 

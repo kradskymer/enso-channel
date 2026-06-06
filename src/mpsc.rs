@@ -15,23 +15,8 @@
 //!
 //! # Examples
 //!
-//! ```
-//! use enso_channel::mpsc;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let (mut tx, mut rx) = mpsc::channel::<u64>(64);
-//!
-//! tx.try_send(42).unwrap();
-//! let _v = *rx.try_recv().unwrap();
-//!
-//! let mut batch = tx.try_send_at_most(8)?;
-//! batch.commit();
-//!
-//! let batch = rx.try_recv_at_most(8)?;
-//! for _ in batch.iter() {
-//!     // ...
-//! }
-//! # Ok(()) }
+//! ```rust
+//! #![doc = include_str!("../examples/mpsc_usage.rs")]
 //! ```
 
 use std::sync::Arc;

@@ -1,11 +1,13 @@
-//! Multi-publisher, multi-consumer broadcast channel.
+//! Multi-Producer, multi-consumer fan-out channel.
 //!
 //! This is the fixed-N, LMAX/Disruptor-style topology where each receiver
-//! observes every published item and publishers are gated by the slowest
-//! receiver.
+//! observes every published item.
+//! Senders are gated by the slowest receiver.
 //!
-//! Dropping a receiver disconnects it and removes it from the gating set.
+//! Dropping a receiver disconnects and removes it from the gating set.
 //! Once all receivers are dropped, send operations observe `Disconnected`.
+//!
+//! A dropped receiver will not able to reconnect to the channel.
 //!
 //! # Capacity
 //!
@@ -13,17 +15,8 @@
 //!
 //! # Examples
 //!
-//! ```
-//! use enso_channel::broadcast;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let (mut tx, mut rxs) = broadcast::channel::<u64, 2>(64);
-//! let [mut rx0, mut rx1] = rxs;
-//!
-//! tx.try_send(7).unwrap();
-//! let _a = *rx0.try_recv().unwrap();
-//! let _b = *rx1.try_recv()?;
-//! # Ok(()) }
+//! ```rust
+//! #![doc = include_str!("../examples/fanout_usage.rs")]
 //! ```
 
 use std::sync::Arc;
