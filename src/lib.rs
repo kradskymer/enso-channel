@@ -97,9 +97,6 @@
 //! In concurrent code, an operation may still succeed while the peer endpoint is being dropped,
 //! and already-committed items may never be observed by the application.
 
-#[macro_use]
-mod channel_api_macros;
-
 mod cursor;
 mod receiver;
 mod ringbuffer;
