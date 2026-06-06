@@ -12,7 +12,7 @@ impl h::BroadcastAdapter<2> for BroadcastFanout2 {
     type Receiver = enso_channel::fanout::Receiver<u32>;
 
     fn channel_broadcast(capacity: usize) -> (Self::Sender, [Self::Receiver; 2]) {
-        enso_channel::fanout::channel::<u32, 2>(capacity)
+        enso_channel::fanout::channel::<u32, 2>(capacity).unwrap()
     }
 
     fn try_send(
@@ -48,7 +48,7 @@ impl Channel for BroadcastContractChan {
         Self::Sender: 'a;
 
     fn channel(capacity: usize) -> (Self::Sender, Self::Receiver) {
-        let (tx, rxs) = enso_channel::fanout::channel::<u32, 2>(capacity);
+        let (tx, rxs) = enso_channel::fanout::channel::<u32, 2>(capacity).unwrap();
         let [rx0, rx1] = rxs;
         drop(rx1);
         (tx, BroadcastContractReceiver(rx0))

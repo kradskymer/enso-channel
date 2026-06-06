@@ -63,6 +63,8 @@ pub(crate) struct U32SlotStates {
 /// The lower 31 bits carry the lap flag.
 const MASK: u32 = (1 << 31) - 1;
 
+pub const MAX_CHANNEL_SIZE: usize = 1 << 30;
+
 /// The shutdown bit within the per-slot `u32` state.
 const SHUTDOWN_BIT: u32 = 1 << 31;
 

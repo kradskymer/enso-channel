@@ -1,7 +1,7 @@
 use enso_channel::{mpsc, ChanWritePermit, ChanWritePermits, ChannelSender};
 
 fn main() {
-    let (mut sender, receiver) = mpsc::channel::<u64>(16);
+    let (mut sender, receiver) = mpsc::channel::<u64>(16).unwrap();
     let mut batch = sender.try_send_at_most(8).unwrap();
     // Disconnect receiver while batch guard is still alive.
     drop(receiver);

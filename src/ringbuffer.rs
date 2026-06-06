@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 
-use crate::{Sentinel, Sequence};
+use crate::{slot_states::MAX_CHANNEL_SIZE, Sentinel, Sequence};
 
 pub(crate) struct RingBuffer<T> {
     slots: Box<[UnsafeCell<T>]>,
@@ -88,7 +88,7 @@ impl RingBufferMeta {
             buffer_size.is_power_of_two(),
             "buffer_size must be a power of two"
         );
-        assert!(buffer_size <= i64::MAX as usize, "buffer_size too large");
+        assert!(buffer_size <= MAX_CHANNEL_SIZE, "buffer_size too large");
 
         let index_mask = buffer_size as i64 - 1;
         let buffer_size = buffer_size as i64;

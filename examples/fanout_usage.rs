@@ -1,7 +1,7 @@
 use enso_channel::{fanout, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
 
 fn main() {
-    let (mut tx, [mut rx0, mut rx1]) = fanout::channel(16);
+    let (mut tx, [mut rx0, mut rx1]) = fanout::channel(16).unwrap();
     // send a single value
     tx.try_send(42).unwrap();
 

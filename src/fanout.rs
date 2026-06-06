@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use crate::errors::{TryReserveError, TrySendAtMostError, TrySendError};
+use crate::errors::{InvalidChannelSize, TryReserveError, TrySendAtMostError, TrySendError};
 use crate::receiver::{ReadRefImpl, ReadRefsImpl};
 use crate::sequencers::{
     FanoutConSeqGate, FanoutConsumerSequencer, MultiPubSeqGate, MultiPublisherSequencer,
@@ -44,12 +44,15 @@ type Consumer<T> = crate::receiver::ReceiverImpl<ConsumerSequencer, T>;
 /// `N` is the number of receivers (fixed at creation).
 ///
 /// The ring buffer is pre-allocated and initialized with `T::default()`.
-pub fn channel<T, const N: usize>(capacity: usize) -> (Sender<N, T>, [Receiver<T>; N])
+pub fn channel<T, const N: usize>(
+    capacity: usize,
+) -> Result<(Sender<N, T>, [Receiver<T>; N]), InvalidChannelSize>
 where
     T: Sentinel,
 {
+    InvalidChannelSize::validate(capacity)?;
     let ring_buffer = Arc::new(RingBuffer::init_with_sentinel(capacity));
-    channel_with_ring::<T, N>(ring_buffer)
+    Ok(channel_with_ring::<T, N>(ring_buffer))
 }
 
 /// Creates a bounded broadcast channel, initializing the ring buffer with `initializer`.
@@ -62,13 +65,14 @@ where
 pub fn channel_with<T, I, const N: usize>(
     capacity: usize,
     initializer: I,
-) -> (Sender<N, T>, [Receiver<T>; N])
+) -> Result<(Sender<N, T>, [Receiver<T>; N]), InvalidChannelSize>
 where
     I: Copy + FnOnce() -> T,
     T: Sentinel,
 {
+    InvalidChannelSize::validate(capacity)?;
     let ring_buffer = Arc::new(RingBuffer::init_with(capacity, initializer));
-    channel_with_ring::<T, N>(ring_buffer)
+    Ok(channel_with_ring::<T, N>(ring_buffer))
 }
 
 fn channel_with_ring<T, const N: usize>(

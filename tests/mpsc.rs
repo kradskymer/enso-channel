@@ -22,7 +22,7 @@ impl Channel for MpscChan {
         Self::Sender: 'a;
 
     fn channel(capacity: usize) -> (Self::Sender, Self::Receiver) {
-        enso_channel::mpsc::channel::<u32>(capacity)
+        enso_channel::mpsc::channel::<u32>(capacity).unwrap()
     }
 
     fn try_send(

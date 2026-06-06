@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use crate::errors::{TryReserveError, TrySendAtMostError, TrySendError};
+use crate::errors::{InvalidChannelSize, TryReserveError, TrySendAtMostError, TrySendError};
 use crate::receiver::{ReadRefImpl, ReadRefsImpl};
 use crate::sequencers::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
 use crate::sequencers::{MultiPubSeqGate, MultiPublisherSequencer};
@@ -39,12 +39,13 @@ type Consumer<T> = crate::receiver::ReceiverImpl<ConsumerSequencer, T>;
 /// Creates a bounded MPSC channel using `T::default()` to initialize the ring.
 ///
 /// `capacity` must be a power of two.
-pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>)
+pub fn channel<T>(capacity: usize) -> Result<(Sender<T>, Receiver<T>), InvalidChannelSize>
 where
     T: Sentinel,
 {
+    InvalidChannelSize::validate(capacity)?;
     let ring_buffer = Arc::new(RingBuffer::init_with_sentinel(capacity));
-    channel_with_ring(ring_buffer)
+    Ok(channel_with_ring(ring_buffer))
 }
 
 /// Creates a bounded MPSC channel, initializing the ring buffer with `initializer`.
@@ -54,13 +55,17 @@ where
 /// `initializer` is invoked once per slot during pre-allocation.
 /// The bound `Copy + FnOnce() -> T` allows passing non-capturing closures and
 /// function pointers while still calling the initializer multiple times.
-pub fn channel_with<T, I>(capacity: usize, initializer: I) -> (Sender<T>, Receiver<T>)
+pub fn channel_with<T, I>(
+    capacity: usize,
+    initializer: I,
+) -> Result<(Sender<T>, Receiver<T>), InvalidChannelSize>
 where
     I: Copy + FnOnce() -> T,
     T: Sentinel,
 {
+    InvalidChannelSize::validate(capacity)?;
     let ring_buffer = Arc::new(RingBuffer::init_with(capacity, initializer));
-    channel_with_ring(ring_buffer)
+    Ok(channel_with_ring(ring_buffer))
 }
 
 fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver<T>)

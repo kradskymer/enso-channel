@@ -3,6 +3,8 @@
 //! All channel topologies in this crate expose explicit backpressure by returning
 //! typed errors instead of blocking.
 
+use crate::slot_states::MAX_CHANNEL_SIZE;
+
 /// Internal error type for Sequencer operations.
 ///
 /// This is not exposed in the public API. It gets converted to appropriate
@@ -48,6 +50,27 @@ pub enum TryRecvError {
     /// The channel was disconnected (e.g. all senders were dropped).
     #[error("The channel is disconnected")]
     Disconnected,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum InvalidChannelSize {
+    #[error("The channel size must be a power of two")]
+    NotAPowerOfTwo,
+
+    #[error("The channel size is too large (max: {MAX_CHANNEL_SIZE})")]
+    TooLarge,
+}
+
+impl InvalidChannelSize {
+    pub(crate) fn validate(channel_size: usize) -> Result<(), InvalidChannelSize> {
+        if !channel_size.is_power_of_two() {
+            return Err(InvalidChannelSize::NotAPowerOfTwo);
+        }
+        if channel_size > MAX_CHANNEL_SIZE {
+            return Err(InvalidChannelSize::TooLarge);
+        }
+        Ok(())
+    }
 }
 
 impl From<TryClaimError> for TryRecvError {

@@ -70,7 +70,7 @@ impl<const N: usize> EnsoBroadcastRunner<N> {
         let (sender, receivers): (
             enso_channel::fanout::Sender<N, u64>,
             [enso_channel::fanout::Receiver<u64>; N],
-        ) = enso_channel::fanout::channel(buffer_size);
+        ) = enso_channel::fanout::channel(buffer_size).unwrap();
 
         let stop = Arc::new(AtomicBool::new(false));
         let last_seen: [Arc<CachePadded<AtomicU64>>; N] =

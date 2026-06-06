@@ -216,7 +216,7 @@ impl EnsoMpscRunner {
         warmup_bursts: u64,
         measure_bursts: u64,
     ) -> Self {
-        let (tx, mut rx) = enso_channel::mpsc::channel::<u64>(buffer_size);
+        let (tx, mut rx) = enso_channel::mpsc::channel::<u64>(buffer_size).unwrap();
         let sink = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let recv_chunk = recv_chunk.clamp(1, burst_size);

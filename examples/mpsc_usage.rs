@@ -1,7 +1,7 @@
 use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
 
 fn main() {
-    let (mut tx, mut rx) = enso_channel::mpsc::channel(16);
+    let (mut tx, mut rx) = enso_channel::mpsc::channel(16).unwrap();
 
     let mut tx_cp = tx.clone();
     tx.try_send(1).unwrap();
