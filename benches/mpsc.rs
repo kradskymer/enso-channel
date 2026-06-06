@@ -454,7 +454,7 @@ fn run_enso_producer(
                             let remaining = burst_size - sent;
                             match tx.try_send_at_most(remaining) {
                                 Ok(batch) => {
-                                    sent += batch.batch_size();
+                                    sent += batch.total_reserved();
                                     break;
                                 }
                                 Err(enso_channel::errors::TrySendAtMostError::Full) => {

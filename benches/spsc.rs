@@ -285,7 +285,7 @@ impl EnsoMpscRunner {
                 loop {
                     match tx.try_send_at_most(to_send) {
                         Ok(mut batch) => {
-                            let writes = batch.batch_size();
+                            let writes = batch.total_reserved();
                             while let Some(batch) = batch.next() {
                                 batch.write(std::hint::black_box(next));
                                 next += 1;

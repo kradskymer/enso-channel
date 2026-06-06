@@ -22,13 +22,13 @@ pub enum TrySendError<T> {
     Disconnected(T),
 }
 
-// #[derive(thiserror::Error, Debug)]
-// pub enum TryReserveError {
-//     #[error("The channel is full")]
-//     Full,
-//     #[error("The consumers are disconnected")]
-//     Disconnected,
-// }
+#[derive(thiserror::Error, Debug)]
+pub enum TryReserveError {
+    #[error("The channel is full")]
+    Full,
+    #[error("The consumers are disconnected")]
+    Disconnected,
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum TrySendAtMostError {
@@ -70,12 +70,12 @@ impl From<TryClaimError> for TrySendAtMostError {
     }
 }
 
-impl From<TryClaimError> for TrySendError<()> {
+impl From<TryClaimError> for TryReserveError {
     #[inline]
     fn from(err: TryClaimError) -> Self {
         match err {
-            TryClaimError::Empty => TrySendError::Full(()),
-            TryClaimError::Shutdown => TrySendError::Disconnected(()),
+            TryClaimError::Empty => TryReserveError::Full,
+            TryClaimError::Shutdown => TryReserveError::Disconnected,
         }
     }
 }

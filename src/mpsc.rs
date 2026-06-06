@@ -16,12 +16,12 @@
 //! # Examples
 //!
 //! ```rust
-//! #![doc = include_str!("../examples/mpsc_usage.rs")]
+#![doc = include_str!("../examples/mpsc_usage.rs")]
 //! ```
 
 use std::sync::Arc;
 
-use crate::errors::{TrySendAtMostError, TrySendError};
+use crate::errors::{TryReserveError, TrySendAtMostError, TrySendError};
 use crate::receiver::{ReadRefImpl, ReadRefsImpl};
 use crate::sequencers::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
 use crate::sequencers::{MultiPubSeqGate, MultiPublisherSequencer};
@@ -51,8 +51,8 @@ where
 ///
 /// `capacity` must be a power of two.
 ///
-/// `initializer` is invoked once per slot index during pre-allocation.
-/// The bound `Copy + FnOnce(usize) -> T` allows passing non-capturing closures and
+/// `initializer` is invoked once per slot during pre-allocation.
+/// The bound `Copy + FnOnce() -> T` allows passing non-capturing closures and
 /// function pointers while still calling the initializer multiple times.
 pub fn channel_with<T, I>(capacity: usize, initializer: I) -> (Sender<T>, Receiver<T>)
 where
@@ -111,7 +111,7 @@ impl<T: Sentinel> ChannelSender<T> for Sender<T> {
         self.inner.try_send(value)
     }
 
-    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TrySendError<()>> {
+    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TryReserveError> {
         let permit = self.inner.try_reserve()?;
         Ok(WritePermit { inner: permit })
     }
@@ -144,8 +144,8 @@ impl<T: Sentinel> ChanWritePermit<T> for WritePermit<'_, T> {
 }
 
 impl<'a, T: Sentinel> ChanWritePermits<T> for WritePermits<'a, T> {
-    fn batch_size(&self) -> usize {
-        self.inner.batch_size()
+    fn total_reserved(&self) -> usize {
+        self.inner.total_reserved()
     }
 
     fn next(&mut self) -> Option<impl ChanWritePermit<T>> {

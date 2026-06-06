@@ -86,7 +86,7 @@ impl<'a> RecvBatchU32 for enso_channel::mpsc::ReadRefs<'a, u32> {
 
 impl<'a> SendBatchU32 for enso_channel::mpsc::WritePermits<'a, u32> {
     fn capacity(&self) -> usize {
-        self.batch_size()
+        self.total_reserved()
     }
 
     fn write_next(&mut self, item: u32) {

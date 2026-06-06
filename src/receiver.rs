@@ -45,8 +45,14 @@ where
     }
 
     fn try_recv_at_most(&mut self, limit: usize) -> Result<ReadRefsImpl<'_, T, C>, TryRecvError> {
-        assert!(limit > 0, "limit must be > 0");
-
+        if limit == 0 {
+            return Ok(ReadRefsImpl::new(
+                &self.consumer_sequencer,
+                &self.ring_buffer,
+                Sequence::new(0),
+                Sequence::new(0),
+            ));
+        }
         let (start_seq, end_seq) = self.consumer_sequencer.try_claim_at_most(limit as i64)?;
         Ok(ReadRefsImpl::new(
             &self.consumer_sequencer,
@@ -200,8 +206,17 @@ pub trait ChanReceiver<T> {
         T: 'this;
 
     /// Tries to receive a single value from the channel.
+    ///
+    /// Returns a [`ChanReadRef`] if a value was available, or an error if the channel
+    /// is empty or disconnected.
     fn try_recv(&mut self) -> Result<Self::ReadRef<'_>, TryRecvError>;
 
     /// Tries to receive a batch of values from the channel.
+    ///
+    /// Returns a [`ChanReadRefs`] if slots were claimed (the batch may contain fewer values than `limit`
+    /// slots if fewer are available), or an error if the channel is empty or disconnected.
+    ///
+    /// If `limit` is `0`, this method will return an empty [`ChanReadRefs`] immediately without
+    /// checking the channel's state.
     fn try_recv_at_most(&mut self, limit: usize) -> Result<Self::ReadRefs<'_>, TryRecvError>;
 }

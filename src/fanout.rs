@@ -7,7 +7,7 @@
 //! Dropping a receiver disconnects and removes it from the gating set.
 //! Once all receivers are dropped, send operations observe `Disconnected`.
 //!
-//! A dropped receiver will not able to reconnect to the channel.
+//! A dropped receiver will not be able to reconnect to the channel.
 //!
 //! # Capacity
 //!
@@ -16,12 +16,12 @@
 //! # Examples
 //!
 //! ```rust
-//! #![doc = include_str!("../examples/fanout_usage.rs")]
+#![doc = include_str!("../examples/fanout_usage.rs")]
 //! ```
 
 use std::sync::Arc;
 
-use crate::errors::{TrySendAtMostError, TrySendError};
+use crate::errors::{TryReserveError, TrySendAtMostError, TrySendError};
 use crate::receiver::{ReadRefImpl, ReadRefsImpl};
 use crate::sequencers::{
     FanoutConSeqGate, FanoutConsumerSequencer, MultiPubSeqGate, MultiPublisherSequencer,
@@ -56,8 +56,9 @@ where
 ///
 /// `capacity` must be a power of two.
 /// `N` is the number of receivers (fixed at creation).
-/// `initializer` is invoked once per slot index during pre-allocation.
-/// The bound `Copy + FnOnce(usize) -> T` allows passing non-capturing closures and function pointers while still calling the initializer multiple times.
+/// `initializer` is invoked once per slot during pre-allocation.
+/// The bound `Copy + FnOnce() -> T` allows passing non-capturing closures and
+/// function pointers while still calling the initializer multiple times.
 pub fn channel_with<T, I, const N: usize>(
     capacity: usize,
     initializer: I,
@@ -123,7 +124,7 @@ where
         self.inner.try_send(value)
     }
 
-    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TrySendError<()>> {
+    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TryReserveError> {
         let permit = self.inner.try_reserve()?;
         Ok(WritePermit { inner: permit })
     }
@@ -144,7 +145,7 @@ pub struct WritePermit<'a, const N: usize, T: Sentinel> {
     inner: crate::guards::WritePermitImpl<'a, T, PublisherSequencer<N>>,
 }
 
-/// A fan-out channel write permits batch for writing one of multiple consecutive items in the channel.
+/// A batch of reserved slots for writing multiple consecutive items to a fan-out channel.
 pub struct WritePermits<'a, const N: usize, T: Sentinel> {
     inner: crate::guards::WritePermitsImpl<'a, T, PublisherSequencer<N>>,
 }
@@ -164,8 +165,8 @@ impl<'a, const N: usize, T: Sentinel> ChanWritePermits<T> for WritePermits<'a, N
         self.inner.commit();
     }
 
-    fn batch_size(&self) -> usize {
-        self.inner.batch_size()
+    fn total_reserved(&self) -> usize {
+        self.inner.total_reserved()
     }
 }
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::errors::TrySendAtMostError;
+use crate::errors::{TryReserveError, TrySendAtMostError};
 use crate::guards::{WritePermitImpl, WritePermitsImpl};
 use crate::{errors::TrySendError, sequencers::Sequencer, RingBuffer, Sequence};
 use crate::{ChanWritePermit, ChanWritePermits};
@@ -50,7 +50,7 @@ impl<P: Sequencer, T: Sentinel> ChannelSender<T> for SenderImpl<P, T> {
         }
     }
 
-    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TrySendError<()>> {
+    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TryReserveError> {
         let seq = self.publisher_sequencer.try_claim()?;
         Ok(WritePermitImpl {
             sequence: seq,
@@ -120,14 +120,16 @@ pub trait ChannelSender<T> {
     ///
     /// Returns a write permit if the slot was reserved successfully without channel closed.
     /// or an error if the channel is full or disconnected.
-    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TrySendError<()>>;
+    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TryReserveError>;
 
     /// Tries to send up to `limit` values of type `T` to the channel.
     ///
-    /// Returns `Ok(())` if there is at least one available slot in the channel and channel is not closed.
-    /// or an error if the channel is full or disconnected.
+    /// Returns a [`ChanWritePermits`] if slots were claimed (the batch may contain
+    /// fewer than `limit` slots if fewer are available) or an error if the channel
+    /// is full or disconnected.
     ///
-    /// If `limit` is `0`, this method will return an empty `WritePermits` immediately.
+    /// If `limit` is `0`, this method will return an empty [`ChanWritePermits`] immediately
+    /// without checking the channel state.
     fn try_send_at_most(
         &mut self,
         limit: usize,

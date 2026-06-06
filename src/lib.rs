@@ -29,7 +29,7 @@
 //! # fn main() {
 //! let (mut tx, mut rx) = mpsc::channel::<u64>(4);
 //! tx.try_send(1).unwrap();
-//! let batch = rx.try_recv_many(1).unwrap();
+//! let batch = rx.try_recv_at_most(1).unwrap();
 //! // `RecvIter` is not an iterator; use `batch.iter()` instead.
 //! for v in batch {
 //!     let _ = v;
@@ -47,7 +47,7 @@
 //! tx.try_send(1).unwrap();
 //!
 //! let r: &u64 = {
-//!     let batch = rx.try_recv_many(1).unwrap();
+//!     let batch = rx.try_recv_at_most(1).unwrap();
 //!     batch.iter().next().unwrap()
 //! };
 //! let _ = *r;
@@ -62,7 +62,7 @@
 //! let (mut tx, mut rx) = mpsc::channel::<u64>(4);
 //! tx.try_send(1).unwrap();
 //!
-//! let batch = rx.try_recv_many(1).unwrap();
+//! let batch = rx.try_recv_at_most(1).unwrap();
 //! let first = batch.iter().next().unwrap();
 //! batch.finish();
 //! let _ = *first;
@@ -72,8 +72,7 @@
 //! ## Public API modules
 //!
 //! - [`mpsc`]: multi-producer, single-consumer
-//! - [`broadcast`]: lossless fixed-N fanout (each receiver sees every item)
-//! - [`mpmc`]: multi-producer, multi-consumer work distribution
+//! - [`fanout`]: lossless fixed-N fanout (each receiver sees every item)
 //!
 //! ## Non-goals
 //!

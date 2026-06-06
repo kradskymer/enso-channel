@@ -124,7 +124,7 @@ impl<const N: usize> EnsoBroadcastRunner<N> {
             loop {
                 match sender.try_send_at_most(limit) {
                     Ok(mut batch) => {
-                        let writes = batch.batch_size();
+                        let writes = batch.total_reserved();
                         while let Some(batch) = batch.next() {
                             batch.write(std::hint::black_box(next));
                             next += 1;

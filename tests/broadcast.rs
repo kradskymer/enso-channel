@@ -111,7 +111,7 @@ impl<'a> RecvBatchU32 for enso_channel::fanout::ReadRefs<'a, u32> {
 
 impl<'a> SendBatchU32 for enso_channel::fanout::WritePermits<'a, 2, u32> {
     fn capacity(&self) -> usize {
-        ChanWritePermits::batch_size(self)
+        ChanWritePermits::total_reserved(self)
     }
 
     fn write_next(&mut self, item: u32) {

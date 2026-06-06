@@ -138,7 +138,7 @@ where
     T: Sentinel,
     P: Sequencer,
 {
-    fn batch_size(&self) -> usize {
+    fn total_reserved(&self) -> usize {
         (self.end_seq - self.start_seq + 1) as usize
     }
 
@@ -175,7 +175,7 @@ pub trait ChanWritePermit<T> {
 /// after which consumer(s) can read the values.
 pub trait ChanWritePermits<T> {
     /// The number of total reserved slots in the channel for writing values.
-    fn batch_size(&self) -> usize;
+    fn total_reserved(&self) -> usize;
 
     /// Returns the next permit for writing a value, if one is available.
     fn next(&mut self) -> Option<impl ChanWritePermit<T>>;
@@ -191,7 +191,8 @@ pub trait ChanWritePermits<T> {
 /// Dropping a [`ChanReadRef`] will release the reference to the channel,
 /// allowing the writer to write a new value to the slot.
 ///
-/// If the reference is dropped before reading the value, the value will never be read.
+/// If the reference is dropped without the value being read, that value is lost
+/// to this consumer (the slot is released back to the channel).
 pub trait ChanReadRef<'a, T>: std::ops::Deref<Target = T> {
     /// Consumes the reference, releasing it to the channel.
     fn finish(self);
@@ -204,7 +205,8 @@ pub trait ChanReadRef<'a, T>: std::ops::Deref<Target = T> {
 /// Dropping a [`ChanReadRefs`] will release the reference to the channel,
 /// allowing the writer to write a new value to all the slots in the batch.
 ///
-/// If the reference is dropped before reading the value, the value will never be read.
+/// If the reference is dropped without the values being read, those values are
+/// lost to this consumer (the slots are released back to the channel).
 pub trait ChanReadRefs<'a, T: 'a> {
     /// Returns an iterator over the values in the batch.
     fn iter(&'a self) -> impl Iterator<Item = &'a T> + 'a;
