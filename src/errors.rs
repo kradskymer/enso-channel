@@ -17,11 +17,18 @@ pub(crate) enum TryClaimError {
 }
 
 #[derive(thiserror::Error, Debug)]
-/// Error returned by `try_send*` operations that require an exact claim size.
 pub enum TrySendError<T> {
     Full(T),
     Disconnected(T),
 }
+
+// #[derive(thiserror::Error, Debug)]
+// pub enum TryReserveError {
+//     #[error("The channel is full")]
+//     Full,
+//     #[error("The consumers are disconnected")]
+//     Disconnected,
+// }
 
 #[derive(thiserror::Error, Debug)]
 pub enum TrySendAtMostError {
@@ -32,7 +39,7 @@ pub enum TrySendAtMostError {
 }
 
 #[derive(thiserror::Error, Debug)]
-/// Error returned by `try_recv*` operations that require an exact claim size.
+/// Error returned by `try_recv*` operations.
 pub enum TryRecvError {
     // /// Not enough items are currently available.
     #[error("The channel is empty")]
@@ -59,6 +66,16 @@ impl From<TryClaimError> for TrySendAtMostError {
         match err {
             TryClaimError::Empty => TrySendAtMostError::Full,
             TryClaimError::Shutdown => TrySendAtMostError::Disconnected,
+        }
+    }
+}
+
+impl From<TryClaimError> for TrySendError<()> {
+    #[inline]
+    fn from(err: TryClaimError) -> Self {
+        match err {
+            TryClaimError::Empty => TrySendError::Full(()),
+            TryClaimError::Shutdown => TrySendError::Disconnected(()),
         }
     }
 }

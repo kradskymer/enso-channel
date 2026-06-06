@@ -28,15 +28,16 @@
 
 use std::sync::Arc;
 
+use crate::errors::{TrySendAtMostError, TrySendError};
 use crate::sequencers::{
     FanoutConSeqGate, FanoutConsumerSequencer, MultiPubSeqGate, MultiPublisherSequencer,
 };
-use crate::RingBuffer;
+use crate::{ChanWritePermit, ChanWritePermits, ChannelSender, RingBuffer, Sentinel};
 
 type PublisherSequencer<const N: usize> = MultiPublisherSequencer<FanoutConSeqGate<N>>;
 type ConsumerSequencer = FanoutConsumerSequencer<MultiPubSeqGate>;
 
-type Publisher<const N: usize, T> = crate::publisher::Publisher<PublisherSequencer<N>, T>;
+type Publisher<const N: usize, T> = crate::sender::SenderImpl<PublisherSequencer<N>, T>;
 type Consumer<T> = crate::consumers::Consumer<ConsumerSequencer, T>;
 
 /// Creates a bounded broadcast channel.
@@ -46,11 +47,11 @@ type Consumer<T> = crate::consumers::Consumer<ConsumerSequencer, T>;
 /// `N` is the number of receivers (fixed at creation).
 ///
 /// The ring buffer is pre-allocated and initialized with `T::default()`.
-pub fn channel<T, const N: usize>(capacity: usize) -> (Sender<T, N>, [Receiver<T>; N])
+pub fn channel<T, const N: usize>(capacity: usize) -> (Sender<N, T>, [Receiver<T>; N])
 where
-    T: Default,
+    T: Sentinel,
 {
-    let ring_buffer = Arc::new(RingBuffer::init_with_default(capacity));
+    let ring_buffer = Arc::new(RingBuffer::init_with_sentinel(capacity));
     channel_with_ring::<T, N>(ring_buffer)
 }
 
@@ -63,9 +64,10 @@ where
 pub fn channel_with<T, I, const N: usize>(
     capacity: usize,
     initializer: I,
-) -> (Sender<T, N>, [Receiver<T>; N])
+) -> (Sender<N, T>, [Receiver<T>; N])
 where
-    I: Copy + FnOnce(usize) -> T,
+    I: Copy + FnOnce() -> T,
+    T: Sentinel,
 {
     let ring_buffer = Arc::new(RingBuffer::init_with(capacity, initializer));
     channel_with_ring::<T, N>(ring_buffer)
@@ -73,7 +75,10 @@ where
 
 fn channel_with_ring<T, const N: usize>(
     ring_buffer: Arc<RingBuffer<T>>,
-) -> (Sender<T, N>, [Receiver<T>; N]) {
+) -> (Sender<N, T>, [Receiver<T>; N])
+where
+    T: Sentinel,
+{
     let ring_meta = ring_buffer.meta();
     let consumed: [Arc<crate::Cursor>; N] =
         std::array::from_fn(|_| Arc::new(crate::Cursor::new(crate::Sequence::INIT)));
@@ -82,7 +87,7 @@ fn channel_with_ring<T, const N: usize>(
     let publisher_sequencer = PublisherSequencer::<N>::new(consumer_gate, ring_meta);
     let publisher_gate = Arc::new(publisher_sequencer.publisher_gate());
 
-    let sender = Sender::<T, N> {
+    let sender = Sender::<N, T> {
         inner: Publisher::<N, T>::new(publisher_sequencer, ring_buffer.clone()),
     };
 
@@ -97,19 +102,93 @@ fn channel_with_ring<T, const N: usize>(
     (sender, receivers)
 }
 
-channel_define_sender! {
-    /// The sending half of a broadcast channel.
-    ///
-    /// This type is `Clone`.
-    #[derive(Clone)]
-    pub struct Sender<T, const N: usize> {
-        inner: Publisher<N, T>,
-    }
-    => SendBatch = SendBatch;
+/// A fan-out channel sender that can send items to multiple receivers.
+#[derive(Clone)]
+pub struct Sender<const N: usize, T> {
+    inner: Publisher<N, T>,
 }
 
-channel_define_send_batch! {
-    pub struct SendBatch<'a, T, F, const N: usize> = (PublisherSequencer<N>);
+impl<const N: usize, T> ChannelSender<T> for Sender<N, T>
+where
+    T: Sentinel,
+{
+    type WritePermit<'this>
+        = WritePermit<'this, N, T>
+    where
+        Self: 'this;
+
+    type WritePermits<'this>
+        = WritePermitsBatch<'this, N, T>
+    where
+        Self: 'this;
+
+    fn try_send(&mut self, value: T) -> Result<(), TrySendError<T>> {
+        self.inner.try_send(value)
+    }
+
+    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TrySendError<()>> {
+        let permit = self.inner.try_reserve()?;
+        Ok(WritePermit { inner: permit })
+    }
+
+    fn try_send_at_most(
+        &mut self,
+        limit: usize,
+    ) -> Result<Self::WritePermits<'_>, TrySendAtMostError> {
+        let batch_permits = self.inner.try_send_at_most(limit)?;
+        Ok(WritePermitsBatch {
+            inner: batch_permits,
+        })
+    }
+}
+
+/// A fan-out channel permit for writing a single item to the channel.
+pub struct WritePermit<'a, const N: usize, T: Sentinel> {
+    inner: crate::permit::WritePermitImpl<'a, T, PublisherSequencer<N>>,
+}
+
+/// A fan-out channel write permits batch for writing one of multiple consecutive items in the channel.
+pub struct WritePermitsBatch<'a, const N: usize, T: Sentinel> {
+    inner: crate::permit::WritePermitsBatchImpl<'a, T, PublisherSequencer<N>>,
+}
+
+/// A fan-out channel batch permit for writing a single item to the channel within a batch.
+pub struct BatchWritePermit<'batch, 'a, const N: usize, T: Sentinel> {
+    inner: crate::permit::BatchWritePermitImpl<'batch, 'a, T, PublisherSequencer<N>>,
+}
+
+impl<const N: usize, T: Sentinel> ChanWritePermit<T> for WritePermit<'_, N, T> {
+    fn write(self, item: T) {
+        self.inner.write(item);
+    }
+}
+
+impl<'batch, 'a, const N: usize, T: Sentinel> ChanWritePermit<T>
+    for BatchWritePermit<'batch, 'a, N, T>
+{
+    fn write(self, item: T) {
+        self.inner.write(item);
+    }
+}
+
+impl<'a, const N: usize, T: Sentinel> ChanWritePermits<T> for WritePermitsBatch<'a, N, T> {
+    type Permit<'this>
+        = BatchWritePermit<'this, 'a, N, T>
+    where
+        Self: 'this;
+
+    fn next(&mut self) -> Option<BatchWritePermit<'_, 'a, N, T>> {
+        let permit = self.inner.next()?;
+        Some(BatchWritePermit { inner: permit })
+    }
+
+    fn commit(self) {
+        self.inner.commit();
+    }
+
+    fn batch_size(&self) -> usize {
+        self.inner.batch_size()
+    }
 }
 
 channel_define_receiver! {

@@ -36,6 +36,7 @@ use bench_support::{
     spawn_timeout_watchdog, write_reports, BurstRecorder, BurstStats, CorePinning, OutputMode,
     ReportRow, DEFAULT_RESULTS_DIR,
 };
+use enso_channel::{ChanWritePermit, ChanWritePermits, ChannelSender};
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 const DEFAULT_BURST_SIZES: &[usize] = &[1, 16, 64, 128];
@@ -48,7 +49,7 @@ struct EnsoBroadcastRunner<const N: usize> {
     burst_size: usize,
     send_limit: usize,
     recv_limit: usize,
-    sender: Option<enso_channel::broadcast::Sender<u64, N>>,
+    sender: Option<enso_channel::fanout::Sender<N, u64>>,
     last_seen: [Arc<CachePadded<AtomicU64>>; N],
     next_value: u64,
     stop: Arc<AtomicBool>,
@@ -67,9 +68,9 @@ impl<const N: usize> EnsoBroadcastRunner<N> {
         measure_bursts: u64,
     ) -> Self {
         let (sender, receivers): (
-            enso_channel::broadcast::Sender<u64, N>,
-            [enso_channel::broadcast::Receiver<u64>; N],
-        ) = enso_channel::broadcast::channel(buffer_size);
+            enso_channel::fanout::Sender<N, u64>,
+            [enso_channel::fanout::Receiver<u64>; N],
+        ) = enso_channel::fanout::channel(buffer_size);
 
         let stop = Arc::new(AtomicBool::new(false));
         let last_seen: [Arc<CachePadded<AtomicU64>>; N] =
@@ -121,14 +122,14 @@ impl<const N: usize> EnsoBroadcastRunner<N> {
             backoff.reset();
 
             loop {
-                match sender.try_send_at_most(limit, || std::hint::black_box(0u64)) {
+                match sender.try_send_at_most(limit) {
                     Ok(mut batch) => {
-                        let writes = batch.capacity();
-                        for _ in 0..writes {
-                            batch.write_next(std::hint::black_box(next));
+                        let writes = batch.batch_size();
+                        while let Some(batch) = batch.next() {
+                            batch.write(std::hint::black_box(next));
                             next += 1;
                         }
-                        batch.finish();
+                        batch.commit();
                         sent += writes;
                         break;
                     }
@@ -211,7 +212,7 @@ impl<const N: usize> Drop for EnsoBroadcastRunner<N> {
 }
 
 fn run_consumer_loop(
-    rx: &mut enso_channel::broadcast::Receiver<u64>,
+    rx: &mut enso_channel::fanout::Receiver<u64>,
     recv_limit: usize,
     sink: Arc<CachePadded<AtomicU64>>,
     stop: Arc<AtomicBool>,

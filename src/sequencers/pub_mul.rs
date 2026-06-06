@@ -25,7 +25,7 @@ struct SharedState {
 impl SharedState {
     fn new(ring_meta: RingBufferMeta) -> Self {
         Self {
-            claimed: Arc::new(Cursor::INIT),
+            claimed: Arc::new(Cursor::default()),
             slot_states: Arc::new(U32SlotStates::new_all_empty(ring_meta)),
             buffer_size: ring_meta.buffer_size(),
         }
@@ -76,18 +76,6 @@ impl<C: ConsumerBarrier> MultiPublisherSequencer<C> {
     }
 
     #[inline]
-    fn do_commit(&self, seq: Sequence) {
-        self.shared_state.slot_states.publish(seq);
-    }
-
-    #[inline]
-    fn do_commit_range(&self, start_seq: Sequence, end_seq: Sequence) {
-        self.shared_state
-            .slot_states
-            .publish_range(start_seq, end_seq);
-    }
-
-    #[inline]
     pub(crate) fn publisher_gate(&self) -> MultiPubSeqGate {
         MultiPubSeqGate {
             slot_states: self.shared_state.slot_states.clone(),
@@ -105,12 +93,9 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
 
         let mut last_claimed = Sequence::new(self.shared_state.claimed.load(Ordering::Relaxed));
         loop {
-            let highest_to_publish = last_claimed + n;
             let start_seq = last_claimed + 1;
 
-            let consumed = self
-                .consumer_gate
-                .max_consumed(start_seq, highest_to_publish);
+            let consumed = self.consumer_gate.max_consumed();
             if consumed.is_shutdown() {
                 return Err(TryClaimError::Shutdown);
             }
@@ -146,16 +131,16 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
 
     #[inline]
     fn commit(&self, seq: Sequence) {
-        self.do_commit(seq);
+        self.shared_state.slot_states.publish(seq);
     }
 
     #[inline]
     fn commit_range(&self, start_seq: Sequence, end_seq: Sequence) {
-        self.do_commit_range(start_seq, end_seq);
+        self.shared_state
+            .slot_states
+            .publish_range(start_seq, end_seq);
     }
 }
-
-impl<C: ConsumerBarrier> crate::sequencers::sealed::Sealed for MultiPublisherSequencer<C> {}
 
 #[derive(Clone)]
 pub(crate) struct MultiPubSeqGate {

@@ -34,6 +34,7 @@ use bench_support::{
     spawn_timeout_watchdog, write_reports, BurstRecorder, BurstStats, CorePinning, OutputMode,
     ReportRow, DEFAULT_RESULTS_DIR,
 };
+use enso_channel::{ChanWritePermits, ChannelSender};
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 const DEFAULT_BURST_SIZES: &[usize] = &[1, 16, 64, 128];
@@ -451,9 +452,9 @@ fn run_enso_producer(
                             }
 
                             let remaining = burst_size - sent;
-                            match tx.try_send_at_most(remaining, || std::hint::black_box(0u64)) {
+                            match tx.try_send_at_most(remaining) {
                                 Ok(batch) => {
-                                    sent += batch.capacity();
+                                    sent += batch.batch_size();
                                     break;
                                 }
                                 Err(enso_channel::errors::TrySendAtMostError::Full) => {

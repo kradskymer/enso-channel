@@ -34,6 +34,7 @@ use bench_support::{
     spawn_timeout_watchdog, write_reports, BurstRecorder, BurstStats, CorePinning, OutputMode,
     ReportRow, DEFAULT_RESULTS_DIR,
 };
+use enso_channel::{ChanWritePermit, ChanWritePermits, ChannelSender};
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 const DEFAULT_BURST_SIZES: &[usize] = &[1, 16, 64, 128];
@@ -282,14 +283,14 @@ impl EnsoMpscRunner {
                 backoff.reset();
 
                 loop {
-                    match tx.try_send_at_most(to_send, || std::hint::black_box(0u64)) {
+                    match tx.try_send_at_most(to_send) {
                         Ok(mut batch) => {
-                            let writes = batch.capacity();
-                            for _ in 0..writes {
-                                batch.write_next(std::hint::black_box(next));
+                            let writes = batch.batch_size();
+                            while let Some(batch) = batch.next() {
+                                batch.write(std::hint::black_box(next));
                                 next += 1;
                             }
-                            batch.finish();
+                            batch.commit();
                             sent += writes;
                             break;
                         }

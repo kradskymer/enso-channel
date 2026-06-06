@@ -1,4 +1,4 @@
-use enso_channel::errors::TryRecvError;
+use enso_channel::{errors::TryRecvError, ChannelSender};
 
 fn main() {
     let (mut sender, mut receiver) = enso_channel::mpsc::channel::<u64>(16);

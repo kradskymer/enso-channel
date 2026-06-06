@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 
-use crate::Sequence;
+use crate::{Sentinel, Sequence};
 
 pub(crate) struct RingBuffer<T> {
     slots: Box<[UnsafeCell<T>]>,
@@ -30,20 +30,20 @@ unsafe impl<T: Send> Send for RingBuffer<T> {}
 unsafe impl<T: Send> Sync for RingBuffer<T> {}
 
 impl<T> RingBuffer<T> {
-    pub fn init_with_default(capacity: usize) -> Self
+    pub fn init_with_sentinel(capacity: usize) -> Self
     where
-        T: Default,
+        T: Sentinel,
     {
-        Self::init_with(capacity, |_| T::default())
+        Self::init_with(capacity, T::sentinel)
     }
 
     pub fn init_with<F>(capacity: usize, initializer: F) -> Self
     where
-        F: Copy + FnOnce(usize) -> T,
+        F: Copy + FnOnce() -> T,
     {
         let ring_meta = RingBufferMeta::new(capacity);
         let slots = (0..capacity)
-            .map(|i| UnsafeCell::new(initializer(i)))
+            .map(|_| UnsafeCell::new(initializer()))
             .collect();
         Self { slots, ring_meta }
     }
@@ -124,14 +124,14 @@ mod tests {
     #[test]
     fn test_invalid_capacity_should_panic() {
         let result = std::panic::catch_unwind(|| {
-            RingBuffer::<u32>::init_with_default(7);
+            RingBuffer::<u32>::init_with_sentinel(7);
         });
         assert!(result.is_err());
     }
 
     #[test]
     fn test_ringbuffer_capacity() {
-        let rb: RingBuffer<u32> = RingBuffer::init_with_default(8);
+        let rb: RingBuffer<u32> = RingBuffer::init_with_sentinel(8);
         assert_eq!(rb.capacity(), 8);
     }
 

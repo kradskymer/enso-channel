@@ -7,16 +7,6 @@ use enso_channel::errors::{TryRecvError, TrySendAtMostError, TrySendError};
 
 use super::shared::{Channel, RecvBatchU32, SendBatchU32};
 
-/// Test-only capability: induce a state where a publisher has successfully *claimed*
-/// a range but failed to *publish/commit* it.
-///
-/// This is used to validate shutdown/disconnect behavior in the presence of
-/// mismatched claim vs publish progress (e.g., panics in user-provided factories).
-pub trait InduceUncommittedSend: Channel {
-    /// Advances internal claim state without committing/publishing the claimed range.
-    fn induce_uncommitted_claim(sender: &mut Self::Sender, n: usize);
-}
-
 /// Contract: FIFO ordering is preserved.
 ///
 /// Send N items, verify recv order matches send order exactly.
@@ -129,18 +119,16 @@ pub fn contract_publisher_drop_disconnects_consumers<C: Channel>() {
     }
 }
 
-/// Contract: Publisher drop disconnects consumers even if there are uncommitted claims.
+/// Contract: Publisher batch drop will commit with sentinel.
 ///
-/// This guards against shutdown boundaries being derived from claim cursors.
-/// The receiver should not wait for sequences that were never published.
-pub fn contract_publisher_drop_disconnects_consumers_with_uncommitted_claims<C>()
+pub fn contract_publisher_drop_padding_with_sentinel_value<C>()
 where
-    C: Channel + InduceUncommittedSend,
+    C: Channel,
 {
     let (mut tx, mut rx) = C::channel(8);
 
     // Create a claim/publish mismatch: claim succeeds, publish does not.
-    C::induce_uncommitted_claim(&mut tx, 4);
+    let batch = C::try_send_at_most_batch(&mut tx, 4);
 
     // No committed items should be observable.
     match C::try_recv(&mut rx) {
@@ -150,17 +138,21 @@ where
         }
         Ok(v) => panic!("expected InsufficientItems, got Ok({v})"),
     }
-
+    drop(batch);
     // Dropping the last sender must disconnect receivers without hanging.
     drop(tx);
 
     match C::try_recv(&mut rx) {
-        Err(TryRecvError::Disconnected) => {}
-        other => panic!("expected Disconnected after publisher drop, got {other:?}"),
+        Ok(i) => {
+            assert_eq!(i, 0)
+        }
+        // Err(TryRecvError::Disconnected) => panic!()
+        other => panic!("expected recv padding values after publisher drop, got {other:?}"),
     }
 
     match C::try_recv_at_most(&mut rx, 1) {
-        Err(TryRecvError::Disconnected) => {}
+        Ok(_) => {}
+        // Err(TryRecvError::Disconnected) => {}
         other => {
             panic!("expected Disconnected on recv_at_most after publisher drop, got {other:?}")
         }
@@ -256,7 +248,7 @@ pub fn contract_send_batch_drop_fills_with_factory_and_commits<C: Channel>() {
 
     let (mut tx, mut rx) = C::channel(8);
 
-    let mut batch = C::try_send_at_most_batch(&mut tx, 4, factory).expect("claim should succeed");
+    let mut batch = C::try_send_at_most_batch(&mut tx, 4).expect("claim should succeed");
     assert_eq!(batch.capacity(), 4);
 
     batch.write_next(1);
@@ -264,7 +256,7 @@ pub fn contract_send_batch_drop_fills_with_factory_and_commits<C: Channel>() {
     drop(batch);
 
     let got = C::try_recv_at_most(&mut rx, 4).expect("recv should observe committed range");
-    assert_eq!(got, vec![1, 2, 9, 9]);
+    assert_eq!(got, vec![1, 2, 0, 0]);
 }
 
 // ============================================================================

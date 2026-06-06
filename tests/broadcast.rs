@@ -1,19 +1,18 @@
 #[macro_use]
 mod harness;
 
+use enso_channel::{ChanWritePermit, ChanWritePermits, ChannelSender};
 use harness::broadcast as h;
-use harness::contracts::InduceUncommittedSend;
 use harness::shared::{Channel, RecvBatchU32, SendBatchU32};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 
 struct BroadcastFanout2;
 
 impl h::BroadcastAdapter<2> for BroadcastFanout2 {
-    type Sender = enso_channel::broadcast::Sender<u32, 2>;
-    type Receiver = enso_channel::broadcast::Receiver<u32>;
+    type Sender = enso_channel::fanout::Sender<2, u32>;
+    type Receiver = enso_channel::fanout::Receiver<u32>;
 
     fn channel_broadcast(capacity: usize) -> (Self::Sender, [Self::Receiver; 2]) {
-        enso_channel::broadcast::channel::<u32, 2>(capacity)
+        enso_channel::fanout::channel::<u32, 2>(capacity)
     }
 
     fn try_send(
@@ -29,27 +28,27 @@ impl h::BroadcastAdapter<2> for BroadcastFanout2 {
     }
 }
 
-struct BroadcastContractReceiver(enso_channel::broadcast::Receiver<u32>);
+struct BroadcastContractReceiver(enso_channel::fanout::Receiver<u32>);
 
 /// Adapter for contract tests: uses only the first receiver.
 struct BroadcastContractChan;
 
 impl Channel for BroadcastContractChan {
-    type Sender = enso_channel::broadcast::Sender<u32, 2>;
+    type Sender = enso_channel::fanout::Sender<2, u32>;
     type Receiver = BroadcastContractReceiver;
 
     type RecvBatch<'a>
-        = enso_channel::broadcast::RecvIter<'a, u32>
+        = enso_channel::fanout::RecvIter<'a, u32>
     where
         Self::Receiver: 'a;
 
     type SendBatch<'a>
-        = enso_channel::broadcast::SendBatch<'a, u32, fn() -> u32, 2>
+        = enso_channel::fanout::WritePermitsBatch<'a, 2, u32>
     where
         Self::Sender: 'a;
 
     fn channel(capacity: usize) -> (Self::Sender, Self::Receiver) {
-        let (tx, rxs) = enso_channel::broadcast::channel::<u32, 2>(capacity);
+        let (tx, rxs) = enso_channel::fanout::channel::<u32, 2>(capacity);
         let [rx0, rx1] = rxs;
         drop(rx1);
         (tx, BroadcastContractReceiver(rx0))
@@ -71,9 +70,17 @@ impl Channel for BroadcastContractChan {
         sender: &mut Self::Sender,
         items: &[u32],
     ) -> Result<usize, enso_channel::errors::TrySendAtMostError> {
-        let mut batch = sender.try_send_at_most(items.len(), || 0)?;
+        let mut batch = sender.try_send_at_most(items.len())?;
         let n = batch.capacity();
-        batch.write_exact(items.iter().take(n).copied());
+        let mut i = 0;
+        while let Some(permit) = batch.next() {
+            if let Some(item) = items.get(i) {
+                permit.write(*item);
+            } else {
+                break;
+            }
+            i += 1;
+        }
         Ok(n)
     }
 
@@ -87,50 +94,32 @@ impl Channel for BroadcastContractChan {
     fn try_send_at_most_batch<'a>(
         sender: &'a mut Self::Sender,
         n: usize,
-        factory: fn() -> u32,
     ) -> Result<Self::SendBatch<'a>, enso_channel::errors::TrySendAtMostError> {
-        sender.try_send_at_most(n, factory)
+        sender.try_send_at_most(n)
     }
 }
 
-impl InduceUncommittedSend for BroadcastContractChan {
-    fn induce_uncommitted_claim(sender: &mut Self::Sender, n: usize) {
-        fn panic_factory() -> u32 {
-            panic!("induced panic to create uncommitted claim")
-        }
-
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let _ = sender.try_send_at_most(n, panic_factory);
-        }));
-
-        assert!(
-            result.is_err(),
-            "expected panic while inducing uncommitted claim"
-        );
-    }
-}
-
-impl<'a> RecvBatchU32 for enso_channel::broadcast::RecvIter<'a, u32> {
+impl<'a> RecvBatchU32 for enso_channel::fanout::RecvIter<'a, u32> {
     fn to_vec(&self) -> Vec<u32> {
         self.iter().copied().collect()
     }
 
     fn finish(self) {
-        enso_channel::broadcast::RecvIter::finish(self)
+        enso_channel::fanout::RecvIter::finish(self)
     }
 }
 
-impl<'a> SendBatchU32 for enso_channel::broadcast::SendBatch<'a, u32, fn() -> u32, 2> {
+impl<'a> SendBatchU32 for enso_channel::fanout::WritePermitsBatch<'a, 2, u32> {
     fn capacity(&self) -> usize {
-        self.capacity()
+        ChanWritePermits::batch_size(self)
     }
 
     fn write_next(&mut self, item: u32) {
-        self.write_next(item)
+        self.next().unwrap().write(item);
     }
 
     fn finish(self) {
-        enso_channel::broadcast::SendBatch::finish(self)
+        enso_channel::fanout::WritePermitsBatch::commit(self)
     }
 }
 
@@ -148,7 +137,6 @@ generate_contract_tests_prefixed!(
         contract_recv_at_most_batch_is_bounded,
         contract_recv_batch_drop_commits_without_iteration,
         contract_publisher_drop_disconnects_consumers,
-        contract_publisher_drop_disconnects_consumers_with_uncommitted_claims,
         contract_consumer_drop_disconnects_publishers,
     ]
 );

@@ -6,9 +6,9 @@ use crate::{
     Cursor, RingBufferMeta, Sequence,
 };
 
-pub(crate) struct FanoutConsumerSequencer<B: ProducerBarrier> {
+pub(crate) struct FanoutConsumerSequencer<P: ProducerBarrier> {
     consumed: Arc<Cursor>,
-    producer_gate: Arc<B>,
+    producer_gate: Arc<P>,
     ring_meta: RingBufferMeta,
 }
 
@@ -61,8 +61,6 @@ impl<B: ProducerBarrier> Sequencer for FanoutConsumerSequencer<B> {
     }
 }
 
-impl<B: ProducerBarrier> crate::sequencers::sealed::Sealed for FanoutConsumerSequencer<B> {}
-
 impl<B: ProducerBarrier> Drop for FanoutConsumerSequencer<B> {
     fn drop(&mut self) {
         // Mark this consumer as inactive so it no longer gates publishers.
@@ -83,7 +81,7 @@ impl<const N: usize> FanoutConSeqGate<N> {
 }
 
 impl<const N: usize> ConsumerBarrier for FanoutConSeqGate<N> {
-    fn max_consumed(&self, _next_seq: Sequence, _end_seq: Sequence) -> SlotState {
+    fn max_consumed(&self) -> SlotState {
         let mut min_consumed = Sequence::SHUTDOWN_OPEN;
         for i in 0..N {
             let value = self.consumed[i].load(Ordering::Acquire);

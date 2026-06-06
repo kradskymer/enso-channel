@@ -6,9 +6,9 @@
 use enso_channel::errors::{TryRecvError, TrySendAtMostError, TrySendError};
 
 /// Core channel trait that all test harnesses must implement.
-pub trait Channel {
-    type Sender;
-    type Receiver;
+pub trait Channel: Send {
+    type Sender: Send;
+    type Receiver: Send;
 
     /// The batch guard type returned by `try_recv_many_batch` / `try_recv_at_most_batch`.
     ///
@@ -38,7 +38,6 @@ pub trait Channel {
     fn try_send_at_most_batch<'a>(
         sender: &'a mut Self::Sender,
         n: usize,
-        factory: fn() -> u32,
     ) -> Result<Self::SendBatch<'a>, TrySendAtMostError>;
 
     fn try_recv(receiver: &mut Self::Receiver) -> Result<u32, TryRecvError>;

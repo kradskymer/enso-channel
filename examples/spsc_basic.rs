@@ -1,3 +1,5 @@
+use enso_channel::{ChanWritePermit, ChanWritePermits, ChannelSender};
+
 fn main() {
     use enso_channel::mpsc;
 
@@ -12,16 +14,22 @@ fn main() {
     }
 
     // Batch send
-    let mut batch = tx.try_send_at_most_default(8).unwrap();
-    for i in 1..=8 {
-        batch.write_next(i);
+    let mut batch = tx.try_send_at_most(8).unwrap();
+    let mut i = 0;
+    while let Some(batch) = batch.next() {
+        i += 1;
+        batch.write(i);
     }
-    batch.finish();
+    batch.commit();
 
     // Batch send with at most semantics.
-    let mut batch = tx.try_send_at_most(8, || 0).unwrap();
-    batch.fill_with(|| 100);
-    drop(batch);
+    let mut batch = tx.try_send_at_most(8).unwrap();
+    let mut i = 0;
+    while let Some(batch) = batch.next() {
+        i += 1;
+        batch.write(i);
+    }
+    batch.commit();
 
     // Batch recv
     {

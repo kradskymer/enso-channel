@@ -1,9 +1,9 @@
 #[macro_use]
 mod harness;
 
+use enso_channel::{ChanWritePermit, ChanWritePermits, ChannelSender};
 use harness::mpsc as h;
 use harness::shared::{Channel, RecvBatchU32, SendBatchU32};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 
 struct MpscChan;
 
@@ -17,7 +17,7 @@ impl Channel for MpscChan {
         Self::Receiver: 'a;
 
     type SendBatch<'a>
-        = enso_channel::mpsc::SendBatch<'a, u32, fn() -> u32>
+        = enso_channel::mpsc::WritePermitsBatch<'a, u32>
     where
         Self::Sender: 'a;
 
@@ -41,18 +41,21 @@ impl Channel for MpscChan {
         sender: &mut Self::Sender,
         items: &[u32],
     ) -> Result<usize, enso_channel::errors::TrySendAtMostError> {
-        let mut batch = sender.try_send_at_most(items.len(), || 0)?;
+        let mut batch = sender.try_send_at_most(items.len())?;
         let n = batch.capacity();
-        batch.write_exact(items.iter().take(n).copied());
+        let mut i = 0;
+        while let Some(permit) = batch.next() {
+            permit.write(items[i]);
+            i += 1;
+        }
         Ok(n)
     }
 
     fn try_send_at_most_batch<'a>(
         sender: &'a mut Self::Sender,
         n: usize,
-        factory: fn() -> u32,
     ) -> Result<Self::SendBatch<'a>, enso_channel::errors::TrySendAtMostError> {
-        sender.try_send_at_most(n, factory)
+        sender.try_send_at_most(n)
     }
 
     fn try_recv_at_most_batch<'a>(
@@ -71,22 +74,15 @@ impl h::CloneSender for MpscChan {
     }
 }
 
-impl harness::contracts::InduceUncommittedSend for MpscChan {
-    fn induce_uncommitted_claim(sender: &mut Self::Sender, n: usize) {
-        fn panic_factory() -> u32 {
-            panic!("intentional panic to skip publish")
-        }
+// impl harness::contracts::InduceUncommittedSend for MpscChan {
+//     fn induce_uncommitted_claim(sender: &mut Self::Sender, n: usize) {
+//         let result = catch_unwind(AssertUnwindSafe(|| {
+//             let _batch = sender.try_send_at_most(n).expect("claim should succeed");
+//         }));
 
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let _batch = sender
-                .try_send_at_most(n, panic_factory)
-                .expect("claim should succeed");
-            // Drop triggers filling via factory, which panics before commit.
-        }));
-
-        assert!(result.is_err(), "expected panic from SendBatch drop");
-    }
-}
+//         assert!(result.is_err(), "expected panic from SendBatch drop");
+//     }
+// }
 
 impl<'a> RecvBatchU32 for enso_channel::mpsc::RecvIter<'a, u32> {
     fn to_vec(&self) -> Vec<u32> {
@@ -98,17 +94,17 @@ impl<'a> RecvBatchU32 for enso_channel::mpsc::RecvIter<'a, u32> {
     }
 }
 
-impl<'a> SendBatchU32 for enso_channel::mpsc::SendBatch<'a, u32, fn() -> u32> {
+impl<'a> SendBatchU32 for enso_channel::mpsc::WritePermitsBatch<'a, u32> {
     fn capacity(&self) -> usize {
-        self.capacity()
+        self.batch_size()
     }
 
     fn write_next(&mut self, item: u32) {
-        self.write_next(item)
+        self.next().unwrap().write(item);
     }
 
     fn finish(self) {
-        enso_channel::mpsc::SendBatch::finish(self)
+        enso_channel::mpsc::WritePermitsBatch::commit(self)
     }
 }
 
@@ -130,7 +126,6 @@ generate_contract_tests_prefixed!(
         contract_recv_at_most_batch_is_bounded,
         contract_recv_batch_drop_commits_without_iteration,
         contract_publisher_drop_disconnects_consumers,
-        contract_publisher_drop_disconnects_consumers_with_uncommitted_claims,
         contract_consumer_drop_disconnects_publishers,
     ]
 );

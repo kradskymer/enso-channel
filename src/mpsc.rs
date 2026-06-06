@@ -24,9 +24,8 @@
 //! tx.try_send(42).unwrap();
 //! let _v = *rx.try_recv().unwrap();
 //!
-//! let mut batch = tx.try_send_at_most(8, || 0)?;
-//! batch.fill_with(|| 1);
-//! batch.finish();
+//! let mut batch = tx.try_send_at_most(8)?;
+//! batch.commit();
 //!
 //! let batch = rx.try_recv_at_most(8)?;
 //! for _ in batch.iter() {
@@ -37,14 +36,15 @@
 
 use std::sync::Arc;
 
+use crate::errors::{TrySendAtMostError, TrySendError};
 use crate::sequencers::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
 use crate::sequencers::{MultiPubSeqGate, MultiPublisherSequencer};
-use crate::RingBuffer;
+use crate::{ChanWritePermit, ChanWritePermits, ChannelSender, RingBuffer, Sentinel};
 
 type PublisherSequencer = MultiPublisherSequencer<ExclusiveConSeqGate>;
 type ConsumerSequencer = ExclusiveConsumerSequencer<MultiPubSeqGate>;
 
-type Publisher<T> = crate::publisher::Publisher<PublisherSequencer, T>;
+type Publisher<T> = crate::sender::SenderImpl<PublisherSequencer, T>;
 type Consumer<T> = crate::consumers::Consumer<ConsumerSequencer, T>;
 
 /// Creates a bounded MPSC channel using `T::default()` to initialize the ring.
@@ -52,9 +52,9 @@ type Consumer<T> = crate::consumers::Consumer<ConsumerSequencer, T>;
 /// `capacity` must be a power of two.
 pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>)
 where
-    T: Default,
+    T: Sentinel,
 {
-    let ring_buffer = Arc::new(RingBuffer::init_with_default(capacity));
+    let ring_buffer = Arc::new(RingBuffer::init_with_sentinel(capacity));
     channel_with_ring(ring_buffer)
 }
 
@@ -67,13 +67,17 @@ where
 /// function pointers while still calling the initializer multiple times.
 pub fn channel_with<T, I>(capacity: usize, initializer: I) -> (Sender<T>, Receiver<T>)
 where
-    I: Copy + FnOnce(usize) -> T,
+    I: Copy + FnOnce() -> T,
+    T: Sentinel,
 {
     let ring_buffer = Arc::new(RingBuffer::init_with(capacity, initializer));
     channel_with_ring(ring_buffer)
 }
 
-fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver<T>) {
+fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver<T>)
+where
+    T: Sentinel,
+{
     let capacity = ring_buffer.capacity() as usize;
 
     // Shared consumed cursor used by the consumer gate and the consumer sequencer.
@@ -97,19 +101,88 @@ fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver
     (sender, receiver)
 }
 
-channel_define_sender! {
-    /// The sending half of an MPSC channel.
-    ///
-    /// This type is `Clone`.
-    #[derive(Clone)]
-    pub struct Sender<T> {
-        inner: Publisher<T>,
-    }
-    => SendBatch = SendBatch;
+/// Sender for an MPSC channel.
+#[derive(Clone)]
+pub struct Sender<T> {
+    inner: Publisher<T>,
 }
 
-channel_define_send_batch! {
-    pub struct SendBatch<'a, T, F> = (PublisherSequencer);
+impl<T: Sentinel> ChannelSender<T> for Sender<T> {
+    type WritePermit<'this>
+        = WritePermit<'this, T>
+    where
+        Self: 'this;
+
+    type WritePermits<'this>
+        = WritePermitsBatch<'this, T>
+    where
+        Self: 'this;
+
+    fn try_send(&mut self, value: T) -> Result<(), TrySendError<T>> {
+        self.inner.try_send(value)
+    }
+
+    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TrySendError<()>> {
+        let permit = self.inner.try_reserve()?;
+        Ok(WritePermit { inner: permit })
+    }
+
+    fn try_send_at_most(
+        &mut self,
+        limit: usize,
+    ) -> Result<Self::WritePermits<'_>, TrySendAtMostError> {
+        let batch_permits = self.inner.try_send_at_most(limit)?;
+        Ok(WritePermitsBatch {
+            inner: batch_permits,
+        })
+    }
+}
+
+/// Permit for writing a single item to an MPSC channel.
+pub struct WritePermit<'a, T: Sentinel> {
+    inner: crate::permit::WritePermitImpl<'a, T, PublisherSequencer>,
+}
+
+/// Permit for writing a batch of items to an MPSC channel.
+pub struct WritePermitsBatch<'a, T: Sentinel> {
+    inner: crate::permit::WritePermitsBatchImpl<'a, T, PublisherSequencer>,
+}
+
+/// Permit for writing a single item in a [`BatchPermits`] to an MPSC channel.
+pub struct BatchWritePermit<'batch, 'a, T: Sentinel> {
+    inner: crate::permit::BatchWritePermitImpl<'batch, 'a, T, PublisherSequencer>,
+}
+
+impl<T: Sentinel> ChanWritePermit<T> for WritePermit<'_, T> {
+    fn write(self, item: T) {
+        self.inner.write(item);
+    }
+}
+
+impl<T: Sentinel> ChanWritePermit<T> for BatchWritePermit<'_, '_, T> {
+    fn write(self, item: T) {
+        self.inner.write(item);
+    }
+}
+
+impl<'a, T: Sentinel> ChanWritePermits<T> for WritePermitsBatch<'a, T> {
+    type Permit<'this>
+        = BatchWritePermit<'this, 'a, T>
+    where
+        Self: 'this;
+
+    fn batch_size(&self) -> usize {
+        self.inner.batch_size()
+    }
+
+    fn next(&mut self) -> Option<BatchWritePermit<'_, 'a, T>> {
+        let permit = self.inner.next()?;
+        Some(BatchWritePermit { inner: permit })
+    }
+
+    fn commit(self) {
+        self.inner.commit();
+    }
 }
 
 channel_define_receiver! {

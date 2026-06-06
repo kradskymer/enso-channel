@@ -100,29 +100,27 @@
 #[macro_use]
 mod channel_api_macros;
 
-pub mod broadcast;
-pub mod mpsc;
-
+mod consumers;
+mod cursor;
 mod ringbuffer;
+mod sequence;
+mod sequencers;
 mod slot_states;
 
-mod consumers;
-mod publisher;
-
-mod sequencers;
-
 pub(crate) mod permit;
-
-pub mod errors;
-mod sequence;
-
-mod cursor;
+pub(crate) mod sender;
 
 pub(crate) use cursor::Cursor;
+pub(crate) use ringbuffer::{RingBuffer, RingBufferMeta};
 pub(crate) use sequence::Sequence;
 pub(crate) use sequencers::ProducerBarrier;
 
-pub(crate) use ringbuffer::{RingBuffer, RingBufferMeta};
+pub use permit::{ChanWritePermit, ChanWritePermits, ReadPermit};
+pub use sender::{ChannelSender, Sentinel};
+
+pub mod errors;
+pub mod fanout;
+pub mod mpsc;
 
 #[cfg(test)]
 mod send_sync_tests {
@@ -144,7 +142,7 @@ mod send_sync_tests {
 
     #[test]
     fn broadcast_is_send() {
-        assert_send::<crate::broadcast::Sender<u32, 2>>();
-        assert_send::<crate::broadcast::Receiver<u32>>();
+        assert_send::<crate::fanout::Sender<2, u32>>();
+        assert_send::<crate::fanout::Receiver<u32>>();
     }
 }
