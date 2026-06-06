@@ -115,7 +115,7 @@ where
         Self: 'this;
 
     type WritePermits<'this>
-        = WritePermitsBatch<'this, N, T>
+        = WritePermits<'this, N, T>
     where
         Self: 'this;
 
@@ -133,7 +133,7 @@ where
         limit: usize,
     ) -> Result<Self::WritePermits<'_>, TrySendAtMostError> {
         let batch_permits = self.inner.try_send_at_most(limit)?;
-        Ok(WritePermitsBatch {
+        Ok(WritePermits {
             inner: batch_permits,
         })
     }
@@ -141,17 +141,12 @@ where
 
 /// A fan-out channel permit for writing a single item to the channel.
 pub struct WritePermit<'a, const N: usize, T: Sentinel> {
-    inner: crate::permit::WritePermitImpl<'a, T, PublisherSequencer<N>>,
+    inner: crate::guards::WritePermitImpl<'a, T, PublisherSequencer<N>>,
 }
 
 /// A fan-out channel write permits batch for writing one of multiple consecutive items in the channel.
-pub struct WritePermitsBatch<'a, const N: usize, T: Sentinel> {
-    inner: crate::permit::WritePermitsBatchImpl<'a, T, PublisherSequencer<N>>,
-}
-
-/// A fan-out channel batch permit for writing a single item to the channel within a batch.
-pub struct BatchWritePermit<'batch, 'a, const N: usize, T: Sentinel> {
-    inner: crate::permit::BatchWritePermitImpl<'batch, 'a, T, PublisherSequencer<N>>,
+pub struct WritePermits<'a, const N: usize, T: Sentinel> {
+    inner: crate::guards::WritePermitsImpl<'a, T, PublisherSequencer<N>>,
 }
 
 impl<const N: usize, T: Sentinel> ChanWritePermit<T> for WritePermit<'_, N, T> {
@@ -160,23 +155,9 @@ impl<const N: usize, T: Sentinel> ChanWritePermit<T> for WritePermit<'_, N, T> {
     }
 }
 
-impl<'batch, 'a, const N: usize, T: Sentinel> ChanWritePermit<T>
-    for BatchWritePermit<'batch, 'a, N, T>
-{
-    fn write(self, item: T) {
-        self.inner.write(item);
-    }
-}
-
-impl<'a, const N: usize, T: Sentinel> ChanWritePermits<T> for WritePermitsBatch<'a, N, T> {
-    type Permit<'this>
-        = BatchWritePermit<'this, 'a, N, T>
-    where
-        Self: 'this;
-
-    fn next(&mut self) -> Option<BatchWritePermit<'_, 'a, N, T>> {
-        let permit = self.inner.next()?;
-        Some(BatchWritePermit { inner: permit })
+impl<'a, const N: usize, T: Sentinel> ChanWritePermits<T> for WritePermits<'a, N, T> {
+    fn next(&mut self) -> Option<impl ChanWritePermit<T>> {
+        self.inner.next()
     }
 
     fn commit(self) {

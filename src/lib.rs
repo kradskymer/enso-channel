@@ -108,14 +108,14 @@ mod sequence;
 mod sequencers;
 mod slot_states;
 
-mod permit;
+mod guards;
 
 pub(crate) use cursor::Cursor;
 pub(crate) use ringbuffer::{RingBuffer, RingBufferMeta};
 pub(crate) use sequence::Sequence;
 pub(crate) use sequencers::ProducerBarrier;
 
-pub use permit::{ChanReadRef, ChanReadRefs, ChanWritePermit, ChanWritePermits};
+pub use guards::{ChanReadRef, ChanReadRefs, ChanWritePermit, ChanWritePermits};
 pub use receiver::ChanReceiver;
 pub use sender::{ChannelSender, Sentinel};
 

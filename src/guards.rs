@@ -55,7 +55,7 @@ where
     T: Sentinel,
 {
     sequence: Sequence,
-    batch: &'batch mut WritePermitsBatchImpl<'a, T, P>,
+    batch: &'batch mut WritePermitsImpl<'a, T, P>,
     wrote: bool,
 }
 
@@ -82,7 +82,7 @@ where
     }
 }
 
-pub(crate) struct WritePermitsBatchImpl<'a, T, P>
+pub(crate) struct WritePermitsImpl<'a, T, P>
 where
     P: Sequencer,
     T: Sentinel,
@@ -94,7 +94,7 @@ where
     pub next_seq: i64,
 }
 
-impl<'a, T, P> WritePermitsBatchImpl<'a, T, P>
+impl<'a, T, P> WritePermitsImpl<'a, T, P>
 where
     P: Sequencer,
     T: Sentinel,
@@ -118,7 +118,7 @@ where
     }
 }
 
-impl<'a, T, P> Drop for WritePermitsBatchImpl<'a, T, P>
+impl<'a, T, P> Drop for WritePermitsImpl<'a, T, P>
 where
     T: Sentinel,
     P: Sequencer,
@@ -133,21 +133,16 @@ where
     }
 }
 
-impl<'a, T, P> ChanWritePermits<T> for WritePermitsBatchImpl<'a, T, P>
+impl<'a, T, P> ChanWritePermits<T> for WritePermitsImpl<'a, T, P>
 where
     T: Sentinel,
     P: Sequencer,
 {
-    type Permit<'this>
-        = BatchWritePermitImpl<'this, 'a, T, P>
-    where
-        Self: 'this;
-
     fn batch_size(&self) -> usize {
         (self.end_seq - self.start_seq + 1) as usize
     }
 
-    fn next(&mut self) -> Option<Self::Permit<'_>> {
+    fn next(&mut self) -> Option<impl ChanWritePermit<T>> {
         self.next()
     }
 
@@ -179,16 +174,11 @@ pub trait ChanWritePermit<T> {
 /// Dropping a [`ChanWritePermits`] will commit the written values to the channel,
 /// after which consumer(s) can read the values.
 pub trait ChanWritePermits<T> {
-    /// A single permit for writing a value to once specific channel slot.
-    type Permit<'this>: ChanWritePermit<T>
-    where
-        Self: 'this;
-
     /// The number of total reserved slots in the channel for writing values.
     fn batch_size(&self) -> usize;
 
     /// Returns the next permit for writing a value, if one is available.
-    fn next(&mut self) -> Option<Self::Permit<'_>>;
+    fn next(&mut self) -> Option<impl ChanWritePermit<T>>;
 
     /// Commit the batch of permits so that the receiver(s) can read the values.
     fn commit(self);

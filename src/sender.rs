@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::errors::TrySendAtMostError;
-use crate::permit::{WritePermitImpl, WritePermitsBatchImpl};
+use crate::guards::{WritePermitImpl, WritePermitsImpl};
 use crate::{errors::TrySendError, sequencers::Sequencer, RingBuffer, Sequence};
 use crate::{ChanWritePermit, ChanWritePermits};
 
@@ -34,7 +34,7 @@ impl<P: Sequencer, T: Sentinel> ChannelSender<T> for SenderImpl<P, T> {
         Self: 'this;
 
     type WritePermits<'this>
-        = WritePermitsBatchImpl<'this, T, P>
+        = WritePermitsImpl<'this, T, P>
     where
         Self: 'this;
 
@@ -65,7 +65,7 @@ impl<P: Sequencer, T: Sentinel> ChannelSender<T> for SenderImpl<P, T> {
         limit: usize,
     ) -> Result<Self::WritePermits<'_>, TrySendAtMostError> {
         if limit == 0 {
-            return Ok(WritePermitsBatchImpl {
+            return Ok(WritePermitsImpl {
                 ring_buffer: &self.ring_buffer,
                 publisher_sequencer: &mut self.publisher_sequencer,
                 start_seq: 0,
@@ -74,7 +74,7 @@ impl<P: Sequencer, T: Sentinel> ChannelSender<T> for SenderImpl<P, T> {
             });
         }
         let (start_seq, end_seq) = self.publisher_sequencer.try_claim_at_most(limit as i64)?;
-        Ok(WritePermitsBatchImpl {
+        Ok(WritePermitsImpl {
             ring_buffer: &self.ring_buffer,
             publisher_sequencer: &mut self.publisher_sequencer,
             start_seq: start_seq.value(),

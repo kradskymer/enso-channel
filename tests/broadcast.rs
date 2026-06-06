@@ -43,7 +43,7 @@ impl Channel for BroadcastContractChan {
         Self::Receiver: 'a;
 
     type SendBatch<'a>
-        = enso_channel::fanout::WritePermitsBatch<'a, 2, u32>
+        = enso_channel::fanout::WritePermits<'a, 2, u32>
     where
         Self::Sender: 'a;
 
@@ -109,7 +109,7 @@ impl<'a> RecvBatchU32 for enso_channel::fanout::ReadRefs<'a, u32> {
     }
 }
 
-impl<'a> SendBatchU32 for enso_channel::fanout::WritePermitsBatch<'a, 2, u32> {
+impl<'a> SendBatchU32 for enso_channel::fanout::WritePermits<'a, 2, u32> {
     fn capacity(&self) -> usize {
         ChanWritePermits::batch_size(self)
     }
@@ -119,7 +119,7 @@ impl<'a> SendBatchU32 for enso_channel::fanout::WritePermitsBatch<'a, 2, u32> {
     }
 
     fn finish(self) {
-        enso_channel::fanout::WritePermitsBatch::commit(self)
+        enso_channel::fanout::WritePermits::commit(self)
     }
 }
 

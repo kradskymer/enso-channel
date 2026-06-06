@@ -17,7 +17,7 @@ impl Channel for MpscChan {
         Self::Receiver: 'a;
 
     type SendBatch<'a>
-        = enso_channel::mpsc::WritePermitsBatch<'a, u32>
+        = enso_channel::mpsc::WritePermits<'a, u32>
     where
         Self::Sender: 'a;
 
@@ -84,7 +84,7 @@ impl<'a> RecvBatchU32 for enso_channel::mpsc::ReadRefs<'a, u32> {
     }
 }
 
-impl<'a> SendBatchU32 for enso_channel::mpsc::WritePermitsBatch<'a, u32> {
+impl<'a> SendBatchU32 for enso_channel::mpsc::WritePermits<'a, u32> {
     fn capacity(&self) -> usize {
         self.batch_size()
     }
@@ -94,7 +94,7 @@ impl<'a> SendBatchU32 for enso_channel::mpsc::WritePermitsBatch<'a, u32> {
     }
 
     fn finish(self) {
-        enso_channel::mpsc::WritePermitsBatch::commit(self)
+        enso_channel::mpsc::WritePermits::commit(self)
     }
 }
 
