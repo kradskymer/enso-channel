@@ -36,7 +36,7 @@ use bench_support::{
     spawn_timeout_watchdog, write_reports, BurstRecorder, BurstStats, CorePinning, OutputMode,
     ReportRow, DEFAULT_RESULTS_DIR,
 };
-use enso_channel::{ChanWritePermit, ChanWritePermits, ChannelSender};
+use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 const DEFAULT_BURST_SIZES: &[usize] = &[1, 16, 64, 128];
@@ -227,9 +227,9 @@ fn run_consumer_loop(
             }
 
             match rx.try_recv_at_most(recv_limit) {
-                Ok(iter) => {
+                Ok(batch) => {
                     let mut latest = None;
-                    for value in iter.iter() {
+                    for value in batch.iter() {
                         latest = Some(*black_box(value));
                     }
 

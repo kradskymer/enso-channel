@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-use enso_channel::{fanout, ChanWritePermit, ChanWritePermits, ChannelSender};
-=======
-use enso_channel::{fanout, ChannelSender, WritePermit, WritePermits};
->>>>>>> dd4e9c5 (refine examples and readme for the API changes)
+use enso_channel::{fanout, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
 
 fn main() {
     let (mut tx, [mut rx0, mut rx1]) = fanout::channel(16);

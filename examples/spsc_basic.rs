@@ -1,4 +1,4 @@
-use enso_channel::{ChanWritePermit, ChanWritePermits, ChannelSender};
+use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
 
 fn main() {
     use enso_channel::mpsc;
@@ -33,9 +33,9 @@ fn main() {
 
     // Batch recv
     {
-        let iter = rx.try_recv_at_most(8).unwrap();
+        let batch = rx.try_recv_at_most(8).unwrap();
         let mut count = 0;
-        for val in iter.iter() {
+        for val in batch.iter() {
             count += 1;
             println!("{val}");
         }
@@ -44,9 +44,9 @@ fn main() {
 
     // Batch recv with at most semantics.
     {
-        let iter = rx.try_recv_at_most(20).unwrap();
+        let batch = rx.try_recv_at_most(20).unwrap();
         let mut count = 0;
-        for val in iter.iter() {
+        for val in batch.iter() {
             count += 1;
             println!("{val}");
         }

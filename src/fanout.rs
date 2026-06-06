@@ -22,16 +22,20 @@
 use std::sync::Arc;
 
 use crate::errors::{TrySendAtMostError, TrySendError};
+use crate::receiver::{ReadRefImpl, ReadRefsImpl};
 use crate::sequencers::{
     FanoutConSeqGate, FanoutConsumerSequencer, MultiPubSeqGate, MultiPublisherSequencer,
 };
-use crate::{ChanWritePermit, ChanWritePermits, ChannelSender, RingBuffer, Sentinel};
+use crate::{
+    ChanReadRef, ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender,
+    RingBuffer, Sentinel,
+};
 
 type PublisherSequencer<const N: usize> = MultiPublisherSequencer<FanoutConSeqGate<N>>;
 type ConsumerSequencer = FanoutConsumerSequencer<MultiPubSeqGate>;
 
 type Publisher<const N: usize, T> = crate::sender::SenderImpl<PublisherSequencer<N>, T>;
-type Consumer<T> = crate::consumers::Consumer<ConsumerSequencer, T>;
+type Consumer<T> = crate::receiver::ReceiverImpl<ConsumerSequencer, T>;
 
 /// Creates a bounded broadcast channel.
 ///
@@ -184,18 +188,67 @@ impl<'a, const N: usize, T: Sentinel> ChanWritePermits<T> for WritePermitsBatch<
     }
 }
 
-channel_define_receiver! {
-    /// The receiving half of a broadcast channel.
-    pub struct Receiver<T> {
-        inner: Consumer<T>,
+/// A receiver for a fan-out channel.
+pub struct Receiver<T> {
+    inner: Consumer<T>,
+}
+
+/// A read reference for a fan-out channel.
+pub struct ReadRef<'a, T> {
+    inner: ReadRefImpl<'a, T, ConsumerSequencer>,
+}
+
+/// A read reference for a batch of values for a fan-out channel.
+pub struct ReadRefs<'a, T> {
+    inner: ReadRefsImpl<'a, T, ConsumerSequencer>,
+}
+
+impl<'a, T> std::ops::Deref for ReadRef<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.inner.deref()
     }
-    => RecvGuard = RecvGuard, RecvIter = RecvIter;
 }
 
-channel_define_recv_guard! {
-    pub struct RecvGuard<'a, T> = (ConsumerSequencer);
+impl<'a, T> ChanReadRef<'a, T> for ReadRef<'a, T> {
+    fn finish(self) {
+        self.inner.finish();
+    }
 }
 
-channel_define_recv_iter! {
-    pub struct RecvIter<'a, T> = (ConsumerSequencer);
+impl<'a, T> ChanReadRefs<'a, T> for ReadRefs<'a, T> {
+    fn iter(&'a self) -> impl Iterator<Item = &'a T> + 'a {
+        self.inner.iter()
+    }
+
+    fn finish(self) {
+        self.inner.finish();
+    }
+}
+
+impl<T> ChanReceiver<T> for Receiver<T> {
+    type ReadRef<'this>
+        = ReadRef<'this, T>
+    where
+        Self: 'this;
+
+    type ReadRefs<'this>
+        = ReadRefs<'this, T>
+    where
+        Self: 'this,
+        T: 'this;
+
+    fn try_recv(&mut self) -> Result<Self::ReadRef<'_>, crate::errors::TryRecvError> {
+        self.inner.try_recv().map(|inner| ReadRef { inner })
+    }
+
+    fn try_recv_at_most(
+        &mut self,
+        limit: usize,
+    ) -> Result<Self::ReadRefs<'_>, crate::errors::TryRecvError> {
+        self.inner
+            .try_recv_at_most(limit)
+            .map(|inner| ReadRefs { inner })
+    }
 }

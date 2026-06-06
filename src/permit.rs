@@ -193,3 +193,32 @@ pub trait ChanWritePermits<T> {
     /// Commit the batch of permits so that the receiver(s) can read the values.
     fn commit(self);
 }
+
+/// A readable reference to a value from the channel.
+///
+/// # Drop
+///
+/// Dropping a [`ChanReadRef`] will release the reference to the channel,
+/// allowing the writer to write a new value to the slot.
+///
+/// If the reference is dropped before reading the value, the value will never be read.
+pub trait ChanReadRef<'a, T>: std::ops::Deref<Target = T> {
+    /// Consumes the reference, releasing it to the channel.
+    fn finish(self);
+}
+
+/// A readable reference to one or more consecutive values from the channel.
+///
+/// # Drop
+///
+/// Dropping a [`ChanReadRefs`] will release the reference to the channel,
+/// allowing the writer to write a new value to all the slots in the batch.
+///
+/// If the reference is dropped before reading the value, the value will never be read.
+pub trait ChanReadRefs<'a, T: 'a> {
+    /// Returns an iterator over the values in the batch.
+    fn iter(&'a self) -> impl Iterator<Item = &'a T> + 'a;
+
+    /// Consumes the reference, releasing it to the channel.
+    fn finish(self);
+}

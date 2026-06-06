@@ -100,22 +100,23 @@
 #[macro_use]
 mod channel_api_macros;
 
-mod consumers;
 mod cursor;
+mod receiver;
 mod ringbuffer;
+mod sender;
 mod sequence;
 mod sequencers;
 mod slot_states;
 
-pub(crate) mod permit;
-pub(crate) mod sender;
+mod permit;
 
 pub(crate) use cursor::Cursor;
 pub(crate) use ringbuffer::{RingBuffer, RingBufferMeta};
 pub(crate) use sequence::Sequence;
 pub(crate) use sequencers::ProducerBarrier;
 
-pub use permit::{ChanWritePermit, ChanWritePermits, ReadPermit};
+pub use permit::{ChanReadRef, ChanReadRefs, ChanWritePermit, ChanWritePermits};
+pub use receiver::ChanReceiver;
 pub use sender::{ChannelSender, Sentinel};
 
 pub mod errors;

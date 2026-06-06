@@ -325,7 +325,7 @@ pub fn contract_recv_at_most_batch_is_bounded<C: Channel>() {
     C::try_send(&mut tx, 1).unwrap();
     C::try_send(&mut tx, 2).unwrap();
 
-    let batch = C::try_recv_at_most_batch(&mut rx, 5).expect("recv_at_most should succeed");
+    let mut batch = C::try_recv_at_most_batch(&mut rx, 5).expect("recv_at_most should succeed");
     let got = batch.to_vec();
     assert_eq!(got, vec![1, 2]);
 }
@@ -341,6 +341,6 @@ pub fn contract_recv_batch_drop_commits_without_iteration<C: Channel>() {
     let batch = C::try_recv_at_most_batch(&mut rx, 2).unwrap();
     drop(batch);
 
-    let batch2 = C::try_recv_at_most_batch(&mut rx, 2).unwrap();
+    let mut batch2 = C::try_recv_at_most_batch(&mut rx, 2).unwrap();
     assert_eq!(batch2.to_vec(), vec![2, 3]);
 }

@@ -1,7 +1,7 @@
 #[macro_use]
 mod harness;
 
-use enso_channel::{ChanWritePermit, ChanWritePermits, ChannelSender};
+use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
 use harness::mpsc as h;
 use harness::shared::{Channel, RecvBatchU32, SendBatchU32};
 
@@ -12,7 +12,7 @@ impl Channel for MpscChan {
     type Receiver = enso_channel::mpsc::Receiver<u32>;
 
     type RecvBatch<'a>
-        = enso_channel::mpsc::RecvIter<'a, u32>
+        = enso_channel::mpsc::ReadRefs<'a, u32>
     where
         Self::Receiver: 'a;
 
@@ -74,23 +74,13 @@ impl h::CloneSender for MpscChan {
     }
 }
 
-// impl harness::contracts::InduceUncommittedSend for MpscChan {
-//     fn induce_uncommitted_claim(sender: &mut Self::Sender, n: usize) {
-//         let result = catch_unwind(AssertUnwindSafe(|| {
-//             let _batch = sender.try_send_at_most(n).expect("claim should succeed");
-//         }));
-
-//         assert!(result.is_err(), "expected panic from SendBatch drop");
-//     }
-// }
-
-impl<'a> RecvBatchU32 for enso_channel::mpsc::RecvIter<'a, u32> {
-    fn to_vec(&self) -> Vec<u32> {
+impl<'a> RecvBatchU32 for enso_channel::mpsc::ReadRefs<'a, u32> {
+    fn to_vec(&mut self) -> Vec<u32> {
         self.iter().copied().collect()
     }
 
     fn finish(self) {
-        enso_channel::mpsc::RecvIter::finish(self)
+        drop(self)
     }
 }
 

@@ -34,7 +34,7 @@ use bench_support::{
     spawn_timeout_watchdog, write_reports, BurstRecorder, BurstStats, CorePinning, OutputMode,
     ReportRow, DEFAULT_RESULTS_DIR,
 };
-use enso_channel::{ChanWritePermits, ChannelSender};
+use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermits, ChannelSender};
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 const DEFAULT_BURST_SIZES: &[usize] = &[1, 16, 64, 128];
@@ -509,9 +509,9 @@ fn run_enso_receiver(
                             let remaining = total_messages - received;
                             let limit = remaining.min(recv_batch);
                             match rx.try_recv_at_most(limit) {
-                                Ok(iter) => {
+                                Ok(batch) => {
                                     let mut chunk = 0usize;
-                                    for guard in iter.iter() {
+                                    for guard in batch.iter() {
                                         std::hint::black_box(*guard);
                                         chunk += 1;
                                     }

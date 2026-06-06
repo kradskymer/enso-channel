@@ -63,7 +63,7 @@ pub trait Channel: Send {
 /// need to (a) iterate via `.iter()` and (b) explicitly commit via `.finish()`.
 pub trait RecvBatchU32 {
     /// Collect all items from the batch via the safe `.iter()` API.
-    fn to_vec(&self) -> Vec<u32>;
+    fn to_vec(&mut self) -> Vec<u32>;
 
     /// Commit the batch immediately (equivalent to dropping it).
     fn finish(self);

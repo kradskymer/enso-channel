@@ -1,4 +1,4 @@
-use enso_channel::{errors::TryRecvError, ChannelSender};
+use enso_channel::{errors::TryRecvError, ChanReadRefs, ChanReceiver, ChannelSender};
 
 fn main() {
     let (mut sender, mut receiver) = enso_channel::mpsc::channel::<u64>(16);
@@ -10,8 +10,8 @@ fn main() {
     // After draining, receiver observes `Disconnected`.
     loop {
         match receiver.try_recv_at_most(64) {
-            Ok(iter) => {
-                for v in iter.iter() {
+            Ok(batch) => {
+                for v in batch.iter() {
                     let _ = *v;
                 }
             }

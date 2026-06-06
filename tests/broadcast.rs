@@ -1,7 +1,7 @@
 #[macro_use]
 mod harness;
 
-use enso_channel::{ChanWritePermit, ChanWritePermits, ChannelSender};
+use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
 use harness::broadcast as h;
 use harness::shared::{Channel, RecvBatchU32, SendBatchU32};
 
@@ -38,7 +38,7 @@ impl Channel for BroadcastContractChan {
     type Receiver = BroadcastContractReceiver;
 
     type RecvBatch<'a>
-        = enso_channel::fanout::RecvIter<'a, u32>
+        = enso_channel::fanout::ReadRefs<'a, u32>
     where
         Self::Receiver: 'a;
 
@@ -99,13 +99,13 @@ impl Channel for BroadcastContractChan {
     }
 }
 
-impl<'a> RecvBatchU32 for enso_channel::fanout::RecvIter<'a, u32> {
-    fn to_vec(&self) -> Vec<u32> {
+impl<'a> RecvBatchU32 for enso_channel::fanout::ReadRefs<'a, u32> {
+    fn to_vec(&mut self) -> Vec<u32> {
         self.iter().copied().collect()
     }
 
     fn finish(self) {
-        enso_channel::fanout::RecvIter::finish(self)
+        drop(self)
     }
 }
 
