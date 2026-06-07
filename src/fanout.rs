@@ -27,7 +27,7 @@ use crate::sequencers::{
     FanoutConSeqGate, FanoutConsumerSequencer, MultiPubSeqGate, MultiPublisherSequencer,
 };
 use crate::{
-    ChanReadRef, ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender,
+    ChanReadRef, ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermit, ChanWritePermits,
     RingBuffer, SlotRecycler,
 };
 
@@ -44,7 +44,7 @@ type Consumer<T> = crate::receiver::ReceiverImpl<ConsumerSequencer, T>;
 /// `N` is the number of receivers (fixed at creation).
 ///
 /// The ring buffer is pre-allocated and initialized with `T::default()`.
-pub fn channel<T: Default, const N: usize>(
+pub fn channel<const N: usize, T: Default>(
     capacity: usize,
 ) -> Result<(Sender<N, T>, [Receiver<T>; N]), InvalidChannelSize> {
     InvalidChannelSize::validate(capacity)?;
@@ -59,7 +59,7 @@ pub fn channel<T: Default, const N: usize>(
 /// `initializer` is invoked once per slot during pre-allocation.
 /// The bound `Copy + FnOnce() -> T` allows passing non-capturing closures and
 /// function pointers while still calling the initializer multiple times.
-pub fn channel_with<T, I, const N: usize>(
+pub fn channel_with<const N: usize, T, I>(
     capacity: usize,
     initializer: I,
 ) -> Result<(Sender<N, T>, [Receiver<T>; N]), InvalidChannelSize>
@@ -103,7 +103,7 @@ pub struct Sender<const N: usize, T> {
     inner: Publisher<N, T>,
 }
 
-impl<const N: usize, T> ChannelSender<T> for Sender<N, T> {
+impl<const N: usize, T> ChanSender<T> for Sender<N, T> {
     type WritePermit<'this, S>
         = WritePermit<'this, N, T, S>
     where
@@ -204,7 +204,7 @@ impl<'a, T> ChanReadRef<'a, T> for ReadRef<'a, T> {
 }
 
 impl<'a, T> ChanReadRefs<'a, T> for ReadRefs<'a, T> {
-    fn iter(&'a self) -> impl Iterator<Item = &'a T> + 'a {
+    fn iter(&self) -> impl Iterator<Item = &'a T> + '_ {
         self.inner.iter()
     }
 

@@ -27,7 +27,7 @@ impl<P: Sequencer, T> SenderImpl<P, T> {
     }
 }
 
-impl<P: Sequencer, T> ChannelSender<T> for SenderImpl<P, T> {
+impl<P: Sequencer, T> ChanSender<T> for SenderImpl<P, T> {
     type WritePermit<'this, S>
         = WritePermitImpl<'this, T, S, P>
     where
@@ -76,7 +76,7 @@ impl<P: Sequencer, T> ChannelSender<T> for SenderImpl<P, T> {
                 ring_buffer: &self.ring_buffer,
                 publisher_sequencer: &mut self.publisher_sequencer,
                 start_seq: 0,
-                end_seq: 0,
+                end_seq: -1,
                 next_seq: 0,
                 recycler,
             });
@@ -94,7 +94,7 @@ impl<P: Sequencer, T> ChannelSender<T> for SenderImpl<P, T> {
 }
 
 /// A sender for a channel that allows sending values of type `T`.
-pub trait ChannelSender<T> {
+pub trait ChanSender<T> {
     /// A write permit of a reserved slot in the channel.
     type WritePermit<'this, S>: ChanWritePermit<T>
     where

@@ -2,7 +2,7 @@
 mod harness;
 
 use enso_channel::slot_recycler::ResetWithDefault;
-use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
+use enso_channel::{ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermit, ChanWritePermits};
 use harness::mpsc as h;
 use harness::shared::{Channel, RecvBatchU32, SendBatchU32};
 

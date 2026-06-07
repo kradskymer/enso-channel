@@ -2,7 +2,7 @@
 mod harness;
 
 use enso_channel::slot_recycler::ResetWithDefault;
-use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
+use enso_channel::{ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermit, ChanWritePermits};
 use harness::broadcast as h;
 use harness::shared::{Channel, RecvBatchU32, SendBatchU32};
 
@@ -13,7 +13,7 @@ impl h::BroadcastAdapter<2> for BroadcastFanout2 {
     type Receiver = enso_channel::fanout::Receiver<u32>;
 
     fn channel_broadcast(capacity: usize) -> (Self::Sender, [Self::Receiver; 2]) {
-        enso_channel::fanout::channel::<u32, 2>(capacity).unwrap()
+        enso_channel::fanout::channel::<2, u32>(capacity).unwrap()
     }
 
     fn try_send(
@@ -49,7 +49,7 @@ impl Channel for BroadcastContractChan {
         Self::Sender: 'a;
 
     fn channel(capacity: usize) -> (Self::Sender, Self::Receiver) {
-        let (tx, rxs) = enso_channel::fanout::channel::<u32, 2>(capacity).unwrap();
+        let (tx, rxs) = enso_channel::fanout::channel::<2, u32>(capacity).unwrap();
         let [rx0, rx1] = rxs;
         drop(rx1);
         (tx, BroadcastContractReceiver(rx0))

@@ -1,5 +1,5 @@
 use enso_channel::{
-    mpsc, slot_recycler::ResetWithDefault, ChanWritePermit, ChanWritePermits, ChannelSender,
+    mpsc, slot_recycler::ResetWithDefault, ChanSender, ChanWritePermit, ChanWritePermits,
 };
 
 fn main() {

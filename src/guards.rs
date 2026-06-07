@@ -53,6 +53,19 @@ where
     }
 }
 
+impl<T, S, P> std::fmt::Debug for WritePermitImpl<'_, T, S, P>
+where
+    P: Sequencer,
+    S: SlotRecycler<T>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WritePermitImpl")
+            .field("sequence", &self.sequence)
+            .field("wrote", &self.wrote)
+            .finish_non_exhaustive()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Multiple contiguous batch permits
 // ---------------------------------------------------------------------------
@@ -147,12 +160,29 @@ where
     S: SlotRecycler<T>,
 {
     fn drop(&mut self) {
+        if self.end_seq == -1 {
+            return;
+        }
         while self.next_seq <= self.end_seq {
             self.recycle(Sequence::new(self.next_seq));
             self.next_seq += 1;
         }
         self.publisher_sequencer
             .commit_range(Sequence::new(self.start_seq), Sequence::new(self.end_seq));
+    }
+}
+
+impl<'a, T, S, P> std::fmt::Debug for WritePermitsImpl<'a, T, S, P>
+where
+    P: Sequencer,
+    S: SlotRecycler<T>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WritePermitsImpl")
+            .field("start_seq", &self.start_seq)
+            .field("end_seq", &self.end_seq)
+            .field("next_seq", &self.next_seq)
+            .finish()
     }
 }
 
@@ -234,7 +264,7 @@ pub trait ChanReadRef<'a, T>: std::ops::Deref<Target = T> {
 /// lost to this consumer (the slots are released back to the channel).
 pub trait ChanReadRefs<'a, T: 'a> {
     /// Returns an iterator over the values in the batch.
-    fn iter(&'a self) -> impl Iterator<Item = &'a T> + 'a;
+    fn iter(&self) -> impl Iterator<Item = &'a T> + '_;
 
     /// Consumes the reference, releasing it to the channel.
     fn finish(self);

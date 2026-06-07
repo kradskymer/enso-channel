@@ -26,7 +26,7 @@ use crate::receiver::{ReadRefImpl, ReadRefsImpl};
 use crate::sequencers::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
 use crate::sequencers::{MultiPubSeqGate, MultiPublisherSequencer};
 use crate::{
-    ChanReadRef, ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender,
+    ChanReadRef, ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermit, ChanWritePermits,
     RingBuffer, SlotRecycler,
 };
 
@@ -96,7 +96,7 @@ pub struct Sender<T> {
     inner: Publisher<T>,
 }
 
-impl<T> ChannelSender<T> for Sender<T> {
+impl<T> ChanSender<T> for Sender<T> {
     type WritePermit<'this, S>
         = WritePermit<'this, T, S>
     where
@@ -197,7 +197,7 @@ impl<'a, T> ChanReadRef<'a, T> for ReadRef<'a, T> {
 }
 
 impl<'a, T> ChanReadRefs<'a, T> for ReadRefs<'a, T> {
-    fn iter(&'a self) -> impl Iterator<Item = &'a T> + 'a {
+    fn iter(&self) -> impl Iterator<Item = &'a T> + '_ {
         self.inner.iter()
     }
 

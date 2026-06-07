@@ -113,7 +113,7 @@ pub(crate) use sequencers::ProducerBarrier;
 
 pub use guards::{ChanReadRef, ChanReadRefs, ChanWritePermit, ChanWritePermits};
 pub use receiver::ChanReceiver;
-pub use sender::ChannelSender;
+pub use sender::ChanSender;
 pub use slot_recycler::SlotRecycler;
 
 pub mod errors;

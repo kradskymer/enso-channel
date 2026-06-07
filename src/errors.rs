@@ -9,7 +9,7 @@ use crate::slot_states::MAX_CHANNEL_SIZE;
 ///
 /// This is not exposed in the public API. It gets converted to appropriate
 /// public error types (TrySendError, TryRecvError, etc.) at the Publisher/Consumer layer.
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub(crate) enum TryClaimError {
     #[error("The channel is empty")]
     Empty,
@@ -18,13 +18,13 @@ pub(crate) enum TryClaimError {
     Shutdown,
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum TrySendError<T> {
     Full(T),
     Disconnected(T),
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum TryReserveError {
     #[error("The channel is full")]
     Full,
@@ -32,7 +32,7 @@ pub enum TryReserveError {
     Disconnected,
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum TrySendAtMostError {
     #[error("The channel is full")]
     Full,
@@ -40,7 +40,7 @@ pub enum TrySendAtMostError {
     Disconnected,
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 /// Error returned by `try_recv*` operations.
 pub enum TryRecvError {
     // /// Not enough items are currently available.
@@ -52,7 +52,7 @@ pub enum TryRecvError {
     Disconnected,
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum InvalidChannelSize {
     #[error("The channel size must be a power of two")]
     NotAPowerOfTwo,
@@ -63,11 +63,11 @@ pub enum InvalidChannelSize {
 
 impl InvalidChannelSize {
     pub(crate) fn validate(channel_size: usize) -> Result<(), InvalidChannelSize> {
-        if !channel_size.is_power_of_two() {
-            return Err(InvalidChannelSize::NotAPowerOfTwo);
-        }
         if channel_size > MAX_CHANNEL_SIZE {
             return Err(InvalidChannelSize::TooLarge);
+        }
+        if !channel_size.is_power_of_two() {
+            return Err(InvalidChannelSize::NotAPowerOfTwo);
         }
         Ok(())
     }

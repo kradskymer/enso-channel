@@ -1,6 +1,6 @@
 use enso_channel::{
-    fanout, slot_recycler::ResetWithDefault, ChanReceiver, ChanWritePermit, ChanWritePermits,
-    ChannelSender,
+    fanout, slot_recycler::ResetWithDefault, ChanReceiver, ChanSender, ChanWritePermit,
+    ChanWritePermits,
 };
 
 fn main() {

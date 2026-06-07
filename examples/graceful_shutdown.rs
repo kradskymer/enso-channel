@@ -1,4 +1,4 @@
-use enso_channel::{errors::TryRecvError, ChanReadRefs, ChanReceiver, ChannelSender};
+use enso_channel::{errors::TryRecvError, ChanReadRefs, ChanReceiver, ChanSender};
 
 fn main() {
     let (mut sender, mut receiver) = enso_channel::mpsc::channel::<u64>(16).unwrap();

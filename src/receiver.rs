@@ -46,20 +46,20 @@ where
 
     fn try_recv_at_most(&mut self, limit: usize) -> Result<ReadRefsImpl<'_, T, C>, TryRecvError> {
         if limit == 0 {
-            return Ok(ReadRefsImpl::new(
-                &self.consumer_sequencer,
-                &self.ring_buffer,
-                Sequence::new(0),
-                Sequence::new(0),
-            ));
+            return Ok(ReadRefsImpl {
+                consumer_sequencer: &self.consumer_sequencer,
+                ring_buffer: &self.ring_buffer,
+                start_seq: Sequence::new(0),
+                end_seq: Sequence::INIT,
+            });
         }
         let (start_seq, end_seq) = self.consumer_sequencer.try_claim_at_most(limit as i64)?;
-        Ok(ReadRefsImpl::new(
-            &self.consumer_sequencer,
-            &self.ring_buffer,
+        Ok(ReadRefsImpl {
+            consumer_sequencer: &self.consumer_sequencer,
+            ring_buffer: &self.ring_buffer,
             start_seq,
             end_seq,
-        ))
+        })
     }
 }
 
@@ -103,44 +103,14 @@ where
     end_seq: Sequence,
 }
 
-impl<'a, C, T> ReadRefsImpl<'a, T, C>
-where
-    C: Sequencer,
-{
-    fn new(
-        consumer_sequencer: &'a C,
-        ring_buffer: &'a RingBuffer<T>,
-        start_seq: Sequence,
-        end_seq: Sequence,
-    ) -> Self {
-        Self {
-            consumer_sequencer,
-            ring_buffer,
-            start_seq,
-            end_seq,
-        }
-    }
-
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
-        ReadBatchIter {
-            ring_buffer: self.ring_buffer,
-            current_seq: self.start_seq,
-            end_seq: self.end_seq,
-        }
-    }
-
-    #[inline]
-    pub fn finish(self) {
-        drop(self);
-    }
-}
-
 impl<C, T> Drop for ReadRefsImpl<'_, T, C>
 where
     C: Sequencer,
 {
     fn drop(&mut self) {
+        if self.end_seq == Sequence::INIT {
+            return;
+        }
         self.consumer_sequencer
             .commit_range(self.start_seq, self.end_seq);
     }
@@ -179,7 +149,7 @@ impl<'a, C, T> ChanReadRefs<'a, T> for ReadRefsImpl<'a, T, C>
 where
     C: Sequencer,
 {
-    fn iter(&self) -> impl Iterator<Item = &'a T> + 'a {
+    fn iter(&self) -> impl Iterator<Item = &'a T> + '_ {
         ReadBatchIter {
             ring_buffer: self.ring_buffer,
             current_seq: self.start_seq,
