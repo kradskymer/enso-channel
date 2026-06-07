@@ -161,6 +161,7 @@ cargo add enso-channel
 
 ```rust
 use enso_channel::mpsc;
+use enso_channel::slot_recycler::ResetWithDefault;
 
 fn main() {
     let (mut tx, mut rx) = mpsc::channel::<u64>(64);
@@ -173,11 +174,11 @@ fn main() {
     }
 
     // Batch send
-    let mut batch = tx.try_send_at_most(8).unwrap();
+    let mut batch = tx.try_send_at_most(8, ResetWithDefault).unwrap();
     for i in 1..=8 {
-        batch.write_next(i);
+        batch.next().unwrap().write(i);
     }
-    batch.finish();
+    batch.commit();
 
     // Batch receive
     let guard = rx.try_recv_at_most(8).unwrap();
@@ -338,9 +339,9 @@ panic recovery, strict state reconciliation) on every operation.
 
 As a result, some behaviors are **caller contracts**:
 
-- **Send batch commit on drop.** `try_send_at_most*` use the sentinel value
-    to fill any unwritten slots when a send batch is finished or dropped.
-    Afterwards the written slots will be published and observed by receiver(s).
+- **Send batch commit on drop.** `try_send_at_most*` use the slot recycler to fill
+- any unwritten slots when a send permit batch is finished or dropped.
+  Afterwards the written slots will be published and observed by receiver(s).
 - **Receive guards commit on drop.** Dropping a receive batch commits the full claimed range.
     If you drop it without iterating, unread items are skipped (considered consumed).
 

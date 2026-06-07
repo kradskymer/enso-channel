@@ -4,12 +4,12 @@ version = "0.1.1"
 edition = "2021"
 authors = ["kradskymer<kradskymer@outlook.com>"]
 license = "MIT OR Apache-2.0"
-description = "Batch-first, bounded, lock-free ring-buffer channels (MPSC/MPMC/Broadcast) for bursty, latency-sensitive systems"
+description = "Batch-first, bounded, lock-free ring-buffer channels (MPSC/Fan-out) for bursty, latency-sensitive systems"
 repository = "https://github.com/kradskymer/enso-channel"
 homepage = "https://github.com/kradskymer/enso-channel"
 documentation = "https://docs.rs/enso-channel"
 readme = "README.md"
-keywords = ["channel", "lock-free", "ring-buffer", "batch", "mpmc"]
+keywords = ["channel", "lock-free", "ring-buffer", "batch"]
 categories = ["concurrency", "data-structures"]
 rust-version = "1.75"
 

@@ -1,4 +1,3 @@
-#![allow(clippy::type_complexity)]
 //! enso_channel
 //!
 //! **Bounded. Lock-free. Batch-native.**
