@@ -147,6 +147,10 @@ impl<T, S: SlotRecycler<T>> ChanWritePermit<T> for WritePermit<'_, T, S> {
     fn write(self, item: T) {
         self.inner.write(item);
     }
+
+    fn update_in_place(self, f: impl FnOnce(&mut T)) {
+        self.inner.update_in_place(f);
+    }
 }
 
 impl<'a, T, S: SlotRecycler<T>> ChanWritePermits<T> for WritePermits<'a, T, S> {

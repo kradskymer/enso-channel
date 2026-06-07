@@ -29,6 +29,13 @@ where
         });
         self.wrote = true;
     }
+
+    fn update_in_place(mut self, f: impl FnOnce(&mut T)) {
+        self.ring_buffer.modify_at(self.sequence, |slot| {
+            f(slot);
+        });
+        self.wrote = true;
+    }
 }
 
 impl<T, S, P> Drop for WritePermitImpl<'_, T, S, P>
@@ -67,6 +74,11 @@ where
 {
     fn write(mut self, item: T) {
         self.batch.write(self.sequence, item);
+        self.wrote = true;
+    }
+
+    fn update_in_place(mut self, f: impl FnOnce(&mut T)) {
+        self.batch.update_in_place(self.sequence, f);
         self.wrote = true;
     }
 }
@@ -117,6 +129,10 @@ where
 
     fn write(&self, seq: Sequence, value: T) {
         self.ring_buffer.modify_at(seq, |slot| *slot = value);
+    }
+
+    fn update_in_place(&self, seq: Sequence, f: impl FnOnce(&mut T)) {
+        self.ring_buffer.modify_at(seq, |slot| f(slot));
     }
 
     fn recycle(&self, seq: Sequence) {
@@ -170,6 +186,8 @@ pub trait ChanWritePermit<T> {
     /// Write the value to the reserved slot.
     /// This method will consume the permit, so it cannot be used again.
     fn write(self, value: T);
+
+    fn update_in_place(self, f: impl FnOnce(&mut T));
 }
 
 /// Indicates a batch of consecutive reserved slots in the channel for writing values.
