@@ -24,18 +24,6 @@ impl<B: ProducerBarrier> ExclusiveConsumerSequencer<B> {
     }
 }
 
-impl<P: ProducerBarrier> ExclusiveConsumerSequencer<P> {
-    #[inline]
-    fn do_commit(&self, seq: Sequence) {
-        self.consumed.store(seq.value(), Ordering::Release);
-    }
-
-    #[inline]
-    fn do_commit_range(&self, _start: Sequence, end: Sequence) {
-        self.do_commit(end);
-    }
-}
-
 impl<P: ProducerBarrier> Sequencer for ExclusiveConsumerSequencer<P> {
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
         self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
@@ -64,16 +52,14 @@ impl<P: ProducerBarrier> Sequencer for ExclusiveConsumerSequencer<P> {
 
     #[inline]
     fn commit(&self, seq: Sequence) {
-        self.do_commit(seq);
+        self.consumed.store(seq.value(), Ordering::Release);
     }
 
     #[inline]
-    fn commit_range(&self, start_seq: Sequence, end_seq: Sequence) {
-        self.do_commit_range(start_seq, end_seq);
+    fn commit_range(&self, _start_seq: Sequence, end_seq: Sequence) {
+        self.commit(end_seq);
     }
 }
-
-impl<P: ProducerBarrier> crate::sequencers::sealed::Sealed for ExclusiveConsumerSequencer<P> {}
 
 impl<P: ProducerBarrier> Drop for ExclusiveConsumerSequencer<P> {
     fn drop(&mut self) {
@@ -96,7 +82,7 @@ impl ExclusiveConSeqGate {
 }
 
 impl ConsumerBarrier for ExclusiveConSeqGate {
-    fn max_consumed(&self, _next_seq: crate::Sequence, _end_seq: crate::Sequence) -> SlotState {
+    fn max_consumed(&self) -> SlotState {
         let value = self.consumed.load(Ordering::Acquire);
         let seq = Sequence::new(value);
         SlotState::new(seq, seq.is_shutdown_open())

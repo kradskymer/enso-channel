@@ -1,4 +1,3 @@
-#![allow(clippy::type_complexity)]
 //! enso_channel
 //!
 //! **Bounded. Lock-free. Batch-native.**
@@ -29,7 +28,7 @@
 //! # fn main() {
 //! let (mut tx, mut rx) = mpsc::channel::<u64>(4);
 //! tx.try_send(1).unwrap();
-//! let batch = rx.try_recv_many(1).unwrap();
+//! let batch = rx.try_recv_at_most(1).unwrap();
 //! // `RecvIter` is not an iterator; use `batch.iter()` instead.
 //! for v in batch {
 //!     let _ = v;
@@ -47,7 +46,7 @@
 //! tx.try_send(1).unwrap();
 //!
 //! let r: &u64 = {
-//!     let batch = rx.try_recv_many(1).unwrap();
+//!     let batch = rx.try_recv_at_most(1).unwrap();
 //!     batch.iter().next().unwrap()
 //! };
 //! let _ = *r;
@@ -62,7 +61,7 @@
 //! let (mut tx, mut rx) = mpsc::channel::<u64>(4);
 //! tx.try_send(1).unwrap();
 //!
-//! let batch = rx.try_recv_many(1).unwrap();
+//! let batch = rx.try_recv_at_most(1).unwrap();
 //! let first = batch.iter().next().unwrap();
 //! batch.finish();
 //! let _ = *first;
@@ -72,8 +71,7 @@
 //! ## Public API modules
 //!
 //! - [`mpsc`]: multi-producer, single-consumer
-//! - [`broadcast`]: lossless fixed-N fanout (each receiver sees every item)
-//! - [`mpmc`]: multi-producer, multi-consumer work distribution
+//! - [`fanout`]: lossless fixed-N fanout (each receiver sees every item)
 //!
 //! ## Non-goals
 //!
@@ -97,33 +95,30 @@
 //! In concurrent code, an operation may still succeed while the peer endpoint is being dropped,
 //! and already-committed items may never be observed by the application.
 
-#[macro_use]
-mod channel_api_macros;
-
-pub mod broadcast;
-pub mod mpmc;
-pub mod mpsc;
-
+mod cursor;
+mod receiver;
 mod ringbuffer;
+mod sender;
+mod sequence;
+mod sequencers;
 mod slot_states;
 
-mod consumers;
-mod publisher;
-
-mod sequencers;
-
-pub(crate) mod permit;
-
-pub mod errors;
-mod sequence;
-
-mod cursor;
+mod guards;
 
 pub(crate) use cursor::Cursor;
+pub(crate) use ringbuffer::{RingBuffer, RingBufferMeta};
 pub(crate) use sequence::Sequence;
 pub(crate) use sequencers::ProducerBarrier;
 
-pub(crate) use ringbuffer::{RingBuffer, RingBufferMeta};
+pub use guards::{ChanReadRef, ChanReadRefs, ChanWritePermit, ChanWritePermits};
+pub use receiver::ChanReceiver;
+pub use sender::ChanSender;
+pub use slot_recycler::SlotRecycler;
+
+pub mod errors;
+pub mod fanout;
+pub mod mpsc;
+pub mod slot_recycler;
 
 #[cfg(test)]
 mod send_sync_tests {
@@ -145,13 +140,7 @@ mod send_sync_tests {
 
     #[test]
     fn broadcast_is_send() {
-        assert_send::<crate::broadcast::Sender<u32, 2>>();
-        assert_send::<crate::broadcast::Receiver<u32>>();
-    }
-
-    #[test]
-    fn mpmc_is_send() {
-        assert_send::<crate::mpmc::Sender<u32>>();
-        assert_send::<crate::mpmc::Receiver<u32>>();
+        assert_send::<crate::fanout::Sender<2, u32>>();
+        assert_send::<crate::fanout::Receiver<u32>>();
     }
 }

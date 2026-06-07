@@ -34,6 +34,8 @@ use bench_support::{
     spawn_timeout_watchdog, write_reports, BurstRecorder, BurstStats, CorePinning, OutputMode,
     ReportRow, DEFAULT_RESULTS_DIR,
 };
+use enso_channel::slot_recycler::ResetWithDefault;
+use enso_channel::{ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermits};
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 const DEFAULT_BURST_SIZES: &[usize] = &[1, 16, 64, 128];
@@ -300,7 +302,7 @@ impl EnsoMpscRunner {
         warmup_bursts: u64,
         measure_bursts: u64,
     ) -> Self {
-        let (tx, mut rx) = enso_channel::mpsc::channel::<u64>(buffer_size);
+        let (tx, mut rx) = enso_channel::mpsc::channel::<u64>(buffer_size).unwrap();
         let iter_to_run = Arc::new(AtomicU64::new(0));
         let iter_completed = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
@@ -451,9 +453,9 @@ fn run_enso_producer(
                             }
 
                             let remaining = burst_size - sent;
-                            match tx.try_send_at_most(remaining, || std::hint::black_box(0u64)) {
+                            match tx.try_send_at_most(remaining, ResetWithDefault) {
                                 Ok(batch) => {
-                                    sent += batch.capacity();
+                                    sent += batch.total_reserved();
                                     break;
                                 }
                                 Err(enso_channel::errors::TrySendAtMostError::Full) => {
@@ -508,9 +510,9 @@ fn run_enso_receiver(
                             let remaining = total_messages - received;
                             let limit = remaining.min(recv_batch);
                             match rx.try_recv_at_most(limit) {
-                                Ok(iter) => {
+                                Ok(batch) => {
                                     let mut chunk = 0usize;
-                                    for guard in iter.iter() {
+                                    for guard in batch.iter() {
                                         std::hint::black_box(*guard);
                                         chunk += 1;
                                     }

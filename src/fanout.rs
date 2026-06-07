@@ -1,13 +1,13 @@
-//! Multi-producer, single-consumer (MPSC) channel.
+//! Multi-Producer, multi-consumer fan-out channel.
 //!
-//! This module provides a bounded MPSC channel backed by a ring buffer.
+//! This is the fixed-N, LMAX/Disruptor-style topology where each receiver
+//! observes every published item.
+//! Senders are gated by the slowest receiver.
 //!
-//! Key properties:
-//! - **Bounded**: capacity is fixed at creation time.
-//! - **Non-blocking**: operations are `try_*` and return an error on full/empty.
-//! - **Cloneable publishers**: `Sender<T>` is `Clone`.
-//! - **Zero-copy receive**: receives yield `&T` via guard/iterator types that
-//!   commit consumption on drop.
+//! Dropping a receiver disconnects and removes it from the gating set.
+//! Once all receivers are dropped, send operations observe `Disconnected`.
+//!
+//! A dropped receiver will not be able to reconnect to the channel.
 //!
 //! # Capacity
 //!
@@ -16,95 +16,102 @@
 //! # Examples
 //!
 //! ```rust
-#![doc = include_str!("../examples/mpsc_usage.rs")]
+#![doc = include_str!("../examples/fanout_usage.rs")]
 //! ```
 
 use std::sync::Arc;
 
 use crate::errors::{InvalidChannelSize, TryReserveError, TrySendAtMostError, TrySendError};
 use crate::receiver::{ReadRefImpl, ReadRefsImpl};
-use crate::sequencers::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
-use crate::sequencers::{MultiPubSeqGate, MultiPublisherSequencer};
+use crate::sequencers::{
+    FanoutConSeqGate, FanoutConsumerSequencer, MultiPubSeqGate, MultiPublisherSequencer,
+};
 use crate::{
     ChanReadRef, ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermit, ChanWritePermits,
     RingBuffer, SlotRecycler,
 };
 
-type PublisherSequencer = MultiPublisherSequencer<ExclusiveConSeqGate>;
-type ConsumerSequencer = ExclusiveConsumerSequencer<MultiPubSeqGate>;
+type PublisherSequencer<const N: usize> = MultiPublisherSequencer<FanoutConSeqGate<N>>;
+type ConsumerSequencer = FanoutConsumerSequencer<MultiPubSeqGate>;
 
-type Publisher<T> = crate::sender::SenderImpl<PublisherSequencer, T>;
+type Publisher<const N: usize, T> = crate::sender::SenderImpl<PublisherSequencer<N>, T>;
 type Consumer<T> = crate::receiver::ReceiverImpl<ConsumerSequencer, T>;
 
-/// Creates a bounded MPSC channel using `T::default()` to initialize the ring.
+/// Creates a bounded broadcast channel.
 ///
 /// `capacity` must be a power of two.
-pub fn channel<T: Default>(
+///
+/// `N` is the number of receivers (fixed at creation).
+///
+/// The ring buffer is pre-allocated and initialized with `T::default()`.
+pub fn channel<const N: usize, T: Default>(
     capacity: usize,
-) -> Result<(Sender<T>, Receiver<T>), InvalidChannelSize> {
+) -> Result<(Sender<N, T>, [Receiver<T>; N]), InvalidChannelSize> {
     InvalidChannelSize::validate(capacity)?;
     let ring_buffer = Arc::new(RingBuffer::init_with(capacity, T::default));
-    Ok(channel_with_ring(ring_buffer))
+    Ok(channel_with_ring::<T, N>(ring_buffer))
 }
 
-/// Creates a bounded MPSC channel, initializing the ring buffer with `initializer`.
+/// Creates a bounded broadcast channel, initializing the ring buffer with `initializer`.
 ///
 /// `capacity` must be a power of two.
-///
+/// `N` is the number of receivers (fixed at creation).
 /// `initializer` is invoked once per slot during pre-allocation.
 /// The bound `Copy + FnOnce() -> T` allows passing non-capturing closures and
 /// function pointers while still calling the initializer multiple times.
-pub fn channel_with<T, I>(
+pub fn channel_with<const N: usize, T, I>(
     capacity: usize,
     initializer: I,
-) -> Result<(Sender<T>, Receiver<T>), InvalidChannelSize>
+) -> Result<(Sender<N, T>, [Receiver<T>; N]), InvalidChannelSize>
 where
     I: Fn() -> T,
 {
     InvalidChannelSize::validate(capacity)?;
     let ring_buffer = Arc::new(RingBuffer::init_with(capacity, initializer));
-    Ok(channel_with_ring(ring_buffer))
+    Ok(channel_with_ring::<T, N>(ring_buffer))
 }
 
-fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver<T>) {
-    let capacity = ring_buffer.capacity() as usize;
+fn channel_with_ring<T, const N: usize>(
+    ring_buffer: Arc<RingBuffer<T>>,
+) -> (Sender<N, T>, [Receiver<T>; N]) {
+    let ring_meta = ring_buffer.meta();
+    let consumed: [Arc<crate::Cursor>; N] =
+        std::array::from_fn(|_| Arc::new(crate::Cursor::new(crate::Sequence::INIT)));
+    let consumer_gate = Arc::new(FanoutConSeqGate::<N>::new(consumed.clone()));
 
-    // Shared consumed cursor used by the consumer gate and the consumer sequencer.
-    let consumed = Arc::new(crate::Cursor::new(crate::Sequence::INIT));
-    let consumer_gate = Arc::new(ExclusiveConSeqGate::new(consumed.clone()));
-
-    let ring_meta = crate::RingBufferMeta::new(capacity);
-    let publisher_sequencer = PublisherSequencer::new(consumer_gate, ring_meta);
+    let publisher_sequencer = PublisherSequencer::<N>::new(consumer_gate, ring_meta);
     let publisher_gate = Arc::new(publisher_sequencer.publisher_gate());
 
-    let consumer_sequencer = ConsumerSequencer::new(consumed, publisher_gate, ring_meta);
-
-    let sender = Sender {
-        inner: Publisher::new(publisher_sequencer, ring_buffer.clone()),
+    let sender = Sender::<N, T> {
+        inner: Publisher::<N, T>::new(publisher_sequencer, ring_buffer.clone()),
     };
 
-    let receiver = Receiver {
-        inner: Consumer::new(consumer_sequencer, ring_buffer),
-    };
+    let receivers: [Receiver<T>; N] = std::array::from_fn(|i| {
+        let consumer_sequencer =
+            ConsumerSequencer::new(publisher_gate.clone(), consumed[i].clone(), ring_meta);
+        Receiver {
+            inner: Consumer::new(consumer_sequencer, ring_buffer.clone()),
+        }
+    });
 
-    (sender, receiver)
+    (sender, receivers)
 }
 
-/// Sender for an MPSC channel.
+/// A fan-out channel sender that can send items to multiple receivers.
 #[derive(Clone)]
-pub struct Sender<T> {
-    inner: Publisher<T>,
+pub struct Sender<const N: usize, T> {
+    inner: Publisher<N, T>,
 }
 
-impl<T> ChanSender<T> for Sender<T> {
+impl<const N: usize, T> ChanSender<T> for Sender<N, T> {
     type WritePermit<'this, S>
-        = WritePermit<'this, T, S>
+        = WritePermit<'this, N, T, S>
     where
         Self: 'this,
         S: SlotRecycler<T>;
 
     type WritePermits<'this, S>
-        = WritePermits<'this, T, S>
+        = WritePermits<'this, N, T, S>
     where
         Self: 'this,
         S: SlotRecycler<T>;
@@ -133,17 +140,17 @@ impl<T> ChanSender<T> for Sender<T> {
     }
 }
 
-/// Permit for writing a single item to an MPSC channel.
-pub struct WritePermit<'a, T, S: SlotRecycler<T>> {
-    inner: crate::guards::WritePermitImpl<'a, T, S, PublisherSequencer>,
+/// A fan-out channel permit for writing a single item to the channel.
+pub struct WritePermit<'a, const N: usize, T, S: SlotRecycler<T>> {
+    inner: crate::guards::WritePermitImpl<'a, T, S, PublisherSequencer<N>>,
 }
 
-/// Permit for writing a batch of items to an MPSC channel.
-pub struct WritePermits<'a, T, S: SlotRecycler<T>> {
-    inner: crate::guards::WritePermitsImpl<'a, T, S, PublisherSequencer>,
+/// A batch of reserved slots for writing multiple consecutive items to a fan-out channel.
+pub struct WritePermits<'a, const N: usize, T, S: SlotRecycler<T>> {
+    inner: crate::guards::WritePermitsImpl<'a, T, S, PublisherSequencer<N>>,
 }
 
-impl<T, S: SlotRecycler<T>> ChanWritePermit<T> for WritePermit<'_, T, S> {
+impl<const N: usize, T, S: SlotRecycler<T>> ChanWritePermit<T> for WritePermit<'_, N, T, S> {
     fn write(self, item: T) {
         self.inner.write(item);
     }
@@ -153,11 +160,7 @@ impl<T, S: SlotRecycler<T>> ChanWritePermit<T> for WritePermit<'_, T, S> {
     }
 }
 
-impl<'a, T, S: SlotRecycler<T>> ChanWritePermits<T> for WritePermits<'a, T, S> {
-    fn total_reserved(&self) -> usize {
-        self.inner.total_reserved()
-    }
-
+impl<'a, const N: usize, T, S: SlotRecycler<T>> ChanWritePermits<T> for WritePermits<'a, N, T, S> {
     fn next(&mut self) -> Option<impl ChanWritePermit<T>> {
         self.inner.next()
     }
@@ -165,19 +168,23 @@ impl<'a, T, S: SlotRecycler<T>> ChanWritePermits<T> for WritePermits<'a, T, S> {
     fn commit(self) {
         self.inner.commit();
     }
+
+    fn total_reserved(&self) -> usize {
+        self.inner.total_reserved()
+    }
 }
 
-/// A receiver for the MPSC channel.
+/// A receiver for a fan-out channel.
 pub struct Receiver<T> {
     inner: Consumer<T>,
 }
 
-/// A read reference for a single value from the MPSC channel.
+/// A read reference for a fan-out channel.
 pub struct ReadRef<'a, T> {
     inner: ReadRefImpl<'a, T, ConsumerSequencer>,
 }
 
-/// A read reference for a batch of values from the MPSC channel.
+/// A read reference for a batch of values for a fan-out channel.
 pub struct ReadRefs<'a, T> {
     inner: ReadRefsImpl<'a, T, ConsumerSequencer>,
 }

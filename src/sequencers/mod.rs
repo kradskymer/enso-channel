@@ -1,7 +1,7 @@
 //! Internal sequencing building blocks.
 //!
 //! This module contains the *sealed* traits and concrete implementations that power the
-//! channel implementations (single-consumer, fixed-N broadcast, work-queue).
+//! channel implementations (single-consumer, fixed-N broadcast).
 //!
 //! ## How the pieces fit
 //!
@@ -30,16 +30,10 @@
 
 mod con_ex;
 mod con_fanout;
-mod con_queue;
 mod pub_mul;
-
-pub(crate) mod sealed {
-    pub trait Sealed {}
-}
 
 pub(crate) use con_ex::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
 pub(crate) use con_fanout::{FanoutConSeqGate, FanoutConsumerSequencer};
-pub(crate) use con_queue::{QueuedConSeqGate, QueuedConsumerSequencer, QueuedConsumerWiring};
 pub(crate) use pub_mul::{MultiPubSeqGate, MultiPublisherSequencer};
 
 use crate::errors::TryClaimError;
@@ -51,7 +45,7 @@ use crate::Sequence;
 ///
 /// Users of the crate should not need to import or interact with it.
 #[doc(hidden)]
-pub trait Sequencer: sealed::Sealed {
+pub(crate) trait Sequencer {
     /// Attempts to reserve the next sequence for publishing.
     fn try_claim(&mut self) -> Result<Sequence, TryClaimError>;
 
@@ -86,7 +80,7 @@ pub(crate) trait ConsumerBarrier {
     /// For fixed-N broadcast semantics, this is the slowest consumer (minimum
     /// of all consumer positions).  `SlotState::is_shutdown()` is true when
     /// the consumer side has disconnected.
-    fn max_consumed(&self, next_seq: Sequence, end_seq: Sequence) -> SlotState;
+    fn max_consumed(&self) -> SlotState;
 }
 
 /// Combines a sequence value with a shutdown flag.

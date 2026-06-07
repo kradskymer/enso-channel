@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 
-use crate::Sequence;
+use crate::{slot_states::MAX_CHANNEL_SIZE, Sequence};
 
 pub(crate) struct RingBuffer<T> {
     slots: Box<[UnsafeCell<T>]>,
@@ -30,20 +30,13 @@ unsafe impl<T: Send> Send for RingBuffer<T> {}
 unsafe impl<T: Send> Sync for RingBuffer<T> {}
 
 impl<T> RingBuffer<T> {
-    pub fn init_with_default(capacity: usize) -> Self
-    where
-        T: Default,
-    {
-        Self::init_with(capacity, |_| T::default())
-    }
-
     pub fn init_with<F>(capacity: usize, initializer: F) -> Self
     where
-        F: Copy + FnOnce(usize) -> T,
+        F: Fn() -> T,
     {
         let ring_meta = RingBufferMeta::new(capacity);
         let slots = (0..capacity)
-            .map(|i| UnsafeCell::new(initializer(i)))
+            .map(|_| UnsafeCell::new(initializer()))
             .collect();
         Self { slots, ring_meta }
     }
@@ -88,7 +81,7 @@ impl RingBufferMeta {
             buffer_size.is_power_of_two(),
             "buffer_size must be a power of two"
         );
-        assert!(buffer_size <= i64::MAX as usize, "buffer_size too large");
+        assert!(buffer_size <= MAX_CHANNEL_SIZE, "buffer_size too large");
 
         let index_mask = buffer_size as i64 - 1;
         let buffer_size = buffer_size as i64;
@@ -124,14 +117,14 @@ mod tests {
     #[test]
     fn test_invalid_capacity_should_panic() {
         let result = std::panic::catch_unwind(|| {
-            RingBuffer::<u32>::init_with_default(7);
+            RingBuffer::<u32>::init_with(7, || 0);
         });
         assert!(result.is_err());
     }
 
     #[test]
     fn test_ringbuffer_capacity() {
-        let rb: RingBuffer<u32> = RingBuffer::init_with_default(8);
+        let rb: RingBuffer<u32> = RingBuffer::init_with(8, || 0);
         assert_eq!(rb.capacity(), 8);
     }
 

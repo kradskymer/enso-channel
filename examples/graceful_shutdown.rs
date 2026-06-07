@@ -1,7 +1,7 @@
-use enso_channel::errors::TryRecvError;
+use enso_channel::{errors::TryRecvError, ChanReadRefs, ChanReceiver, ChanSender};
 
 fn main() {
-    let (mut sender, mut receiver) = enso_channel::mpsc::channel::<u64>(16);
+    let (mut sender, mut receiver) = enso_channel::mpsc::channel::<u64>(16).unwrap();
     sender.try_send(42).unwrap();
     // Drop sender to initiate shutdown.
     drop(sender);
@@ -10,8 +10,8 @@ fn main() {
     // After draining, receiver observes `Disconnected`.
     loop {
         match receiver.try_recv_at_most(64) {
-            Ok(iter) => {
-                for v in iter.iter() {
+            Ok(batch) => {
+                for v in batch.iter() {
                     let _ = *v;
                 }
             }

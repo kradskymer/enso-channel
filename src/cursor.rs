@@ -6,11 +6,8 @@ use crate::Sequence;
 pub(crate) struct Cursor(CachePadded<AtomicI64>);
 
 impl Cursor {
-    #[allow(clippy::declare_interior_mutable_const)]
-    pub const INIT: Self = Self(CachePadded::new(AtomicI64::new(Sequence::INIT.value())));
-
     #[inline]
-    pub(crate) fn new(value: Sequence) -> Self {
+    pub(crate) const fn new(value: Sequence) -> Self {
         Self(CachePadded::new(AtomicI64::new(value.value())))
     }
 
@@ -38,5 +35,11 @@ impl Cursor {
         // to transition a sentinel value; using `compare_exchange_weak` there can
         // spuriously fail and leave the channel in an "open" state.
         self.0.compare_exchange(current, new, success, failure)
+    }
+}
+
+impl Default for Cursor {
+    fn default() -> Self {
+        Self::new(Sequence::INIT)
     }
 }

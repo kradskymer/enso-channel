@@ -1,7 +1,9 @@
+use enso_channel::{ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermit, ChanWritePermits};
+
 fn main() {
     use enso_channel::mpsc;
 
-    let (mut tx, mut rx) = mpsc::channel::<u64>(64);
+    let (mut tx, mut rx) = mpsc::channel::<u64>(64).unwrap();
 
     // Single send/recv
     tx.try_send(42).unwrap();
@@ -12,22 +14,28 @@ fn main() {
     }
 
     // Batch send
-    let mut batch = tx.try_send_at_most_default(8).unwrap();
-    for i in 1..=8 {
-        batch.write_next(i);
+    let mut batch = tx.try_send_at_most(8, |i: &mut _| *i = 0).unwrap();
+    let mut i = 0;
+    while let Some(batch) = batch.next() {
+        i += 1;
+        batch.write(i);
     }
-    batch.finish();
+    batch.commit();
 
     // Batch send with at most semantics.
-    let mut batch = tx.try_send_at_most(8, || 0).unwrap();
-    batch.fill_with(|| 100);
-    drop(batch);
+    let mut batch = tx.try_send_at_most(8, |i: &mut _| *i = 0).unwrap();
+    let mut i = 0;
+    while let Some(batch) = batch.next() {
+        i += 1;
+        batch.write(i);
+    }
+    batch.commit();
 
     // Batch recv
     {
-        let iter = rx.try_recv_at_most(8).unwrap();
+        let batch = rx.try_recv_at_most(8).unwrap();
         let mut count = 0;
-        for val in iter.iter() {
+        for val in batch.iter() {
             count += 1;
             println!("{val}");
         }
@@ -36,9 +44,9 @@ fn main() {
 
     // Batch recv with at most semantics.
     {
-        let iter = rx.try_recv_at_most(20).unwrap();
+        let batch = rx.try_recv_at_most(20).unwrap();
         let mut count = 0;
-        for val in iter.iter() {
+        for val in batch.iter() {
             count += 1;
             println!("{val}");
         }
