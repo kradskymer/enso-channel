@@ -14,7 +14,7 @@ fn main() {
     }
 
     // Batch send
-    let mut batch = tx.try_send_at_most(8).unwrap();
+    let mut batch = tx.try_send_at_most(8, |i: &mut _| *i = 0).unwrap();
     let mut i = 0;
     while let Some(batch) = batch.next() {
         i += 1;
@@ -23,7 +23,7 @@ fn main() {
     batch.commit();
 
     // Batch send with at most semantics.
-    let mut batch = tx.try_send_at_most(8).unwrap();
+    let mut batch = tx.try_send_at_most(8, |i: &mut _| *i = 0).unwrap();
     let mut i = 0;
     while let Some(batch) = batch.next() {
         i += 1;

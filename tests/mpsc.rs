@@ -1,6 +1,7 @@
 #[macro_use]
 mod harness;
 
+use enso_channel::slot_recycler::ResetWithDefault;
 use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
 use harness::mpsc as h;
 use harness::shared::{Channel, RecvBatchU32, SendBatchU32};
@@ -17,7 +18,7 @@ impl Channel for MpscChan {
         Self::Receiver: 'a;
 
     type SendBatch<'a>
-        = enso_channel::mpsc::WritePermits<'a, u32>
+        = enso_channel::mpsc::WritePermits<'a, u32, ResetWithDefault>
     where
         Self::Sender: 'a;
 
@@ -41,7 +42,7 @@ impl Channel for MpscChan {
         sender: &mut Self::Sender,
         items: &[u32],
     ) -> Result<usize, enso_channel::errors::TrySendAtMostError> {
-        let mut batch = sender.try_send_at_most(items.len())?;
+        let mut batch = sender.try_send_at_most(items.len(), ResetWithDefault)?;
         let n = batch.capacity();
         let mut i = 0;
         while let Some(permit) = batch.next() {
@@ -55,7 +56,7 @@ impl Channel for MpscChan {
         sender: &'a mut Self::Sender,
         n: usize,
     ) -> Result<Self::SendBatch<'a>, enso_channel::errors::TrySendAtMostError> {
-        sender.try_send_at_most(n)
+        sender.try_send_at_most(n, ResetWithDefault)
     }
 
     fn try_recv_at_most_batch<'a>(
@@ -84,7 +85,7 @@ impl<'a> RecvBatchU32 for enso_channel::mpsc::ReadRefs<'a, u32> {
     }
 }
 
-impl<'a> SendBatchU32 for enso_channel::mpsc::WritePermits<'a, u32> {
+impl<'a> SendBatchU32 for enso_channel::mpsc::WritePermits<'a, u32, ResetWithDefault> {
     fn capacity(&self) -> usize {
         self.total_reserved()
     }

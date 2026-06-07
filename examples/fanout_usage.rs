@@ -1,4 +1,7 @@
-use enso_channel::{fanout, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
+use enso_channel::{
+    fanout, slot_recycler::ResetWithDefault, ChanReceiver, ChanWritePermit, ChanWritePermits,
+    ChannelSender,
+};
 
 fn main() {
     let (mut tx, [mut rx0, mut rx1]) = fanout::channel(16).unwrap();
@@ -6,7 +9,7 @@ fn main() {
     tx.try_send(42).unwrap();
 
     // reserve and send
-    let mut permits = tx.try_send_at_most(16).unwrap();
+    let mut permits = tx.try_send_at_most(16, ResetWithDefault).unwrap();
     let mut i = 100;
     while let Some(permit) = permits.next() {
         permit.write(i);

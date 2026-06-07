@@ -36,6 +36,7 @@ use bench_support::{
     spawn_timeout_watchdog, write_reports, BurstRecorder, BurstStats, CorePinning, OutputMode,
     ReportRow, DEFAULT_RESULTS_DIR,
 };
+use enso_channel::slot_recycler::ResetWithDefault;
 use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;
@@ -122,7 +123,7 @@ impl<const N: usize> EnsoBroadcastRunner<N> {
             backoff.reset();
 
             loop {
-                match sender.try_send_at_most(limit) {
+                match sender.try_send_at_most(limit, ResetWithDefault) {
                     Ok(mut batch) => {
                         let writes = batch.total_reserved();
                         while let Some(batch) = batch.next() {

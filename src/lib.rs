@@ -113,11 +113,13 @@ pub(crate) use sequencers::ProducerBarrier;
 
 pub use guards::{ChanReadRef, ChanReadRefs, ChanWritePermit, ChanWritePermits};
 pub use receiver::ChanReceiver;
-pub use sender::{ChannelSender, Sentinel};
+pub use sender::ChannelSender;
+pub use slot_recycler::SlotRecycler;
 
 pub mod errors;
 pub mod fanout;
 pub mod mpsc;
+pub mod slot_recycler;
 
 #[cfg(test)]
 mod send_sync_tests {

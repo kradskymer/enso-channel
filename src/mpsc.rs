@@ -27,7 +27,7 @@ use crate::sequencers::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
 use crate::sequencers::{MultiPubSeqGate, MultiPublisherSequencer};
 use crate::{
     ChanReadRef, ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender,
-    RingBuffer, Sentinel,
+    RingBuffer, SlotRecycler,
 };
 
 type PublisherSequencer = MultiPublisherSequencer<ExclusiveConSeqGate>;
@@ -39,12 +39,11 @@ type Consumer<T> = crate::receiver::ReceiverImpl<ConsumerSequencer, T>;
 /// Creates a bounded MPSC channel using `T::default()` to initialize the ring.
 ///
 /// `capacity` must be a power of two.
-pub fn channel<T>(capacity: usize) -> Result<(Sender<T>, Receiver<T>), InvalidChannelSize>
-where
-    T: Sentinel,
-{
+pub fn channel<T: Default>(
+    capacity: usize,
+) -> Result<(Sender<T>, Receiver<T>), InvalidChannelSize> {
     InvalidChannelSize::validate(capacity)?;
-    let ring_buffer = Arc::new(RingBuffer::init_with_sentinel(capacity));
+    let ring_buffer = Arc::new(RingBuffer::init_with(capacity, T::default));
     Ok(channel_with_ring(ring_buffer))
 }
 
@@ -60,18 +59,14 @@ pub fn channel_with<T, I>(
     initializer: I,
 ) -> Result<(Sender<T>, Receiver<T>), InvalidChannelSize>
 where
-    I: Copy + FnOnce() -> T,
-    T: Sentinel,
+    I: Fn() -> T,
 {
     InvalidChannelSize::validate(capacity)?;
     let ring_buffer = Arc::new(RingBuffer::init_with(capacity, initializer));
     Ok(channel_with_ring(ring_buffer))
 }
 
-fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver<T>)
-where
-    T: Sentinel,
-{
+fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver<T>) {
     let capacity = ring_buffer.capacity() as usize;
 
     // Shared consumed cursor used by the consumer gate and the consumer sequencer.
@@ -101,31 +96,37 @@ pub struct Sender<T> {
     inner: Publisher<T>,
 }
 
-impl<T: Sentinel> ChannelSender<T> for Sender<T> {
-    type WritePermit<'this>
-        = WritePermit<'this, T>
+impl<T> ChannelSender<T> for Sender<T> {
+    type WritePermit<'this, S>
+        = WritePermit<'this, T, S>
     where
-        Self: 'this;
+        Self: 'this,
+        S: SlotRecycler<T>;
 
-    type WritePermits<'this>
-        = WritePermits<'this, T>
+    type WritePermits<'this, S>
+        = WritePermits<'this, T, S>
     where
-        Self: 'this;
+        Self: 'this,
+        S: SlotRecycler<T>;
 
     fn try_send(&mut self, value: T) -> Result<(), TrySendError<T>> {
         self.inner.try_send(value)
     }
 
-    fn try_reserve(&mut self) -> Result<Self::WritePermit<'_>, TryReserveError> {
-        let permit = self.inner.try_reserve()?;
+    fn try_reserve<S: SlotRecycler<T>>(
+        &mut self,
+        recycler: S,
+    ) -> Result<Self::WritePermit<'_, S>, TryReserveError> {
+        let permit = self.inner.try_reserve(recycler)?;
         Ok(WritePermit { inner: permit })
     }
 
-    fn try_send_at_most(
+    fn try_send_at_most<S: SlotRecycler<T>>(
         &mut self,
         limit: usize,
-    ) -> Result<Self::WritePermits<'_>, TrySendAtMostError> {
-        let batch_permits = self.inner.try_send_at_most(limit)?;
+        recycler: S,
+    ) -> Result<Self::WritePermits<'_, S>, TrySendAtMostError> {
+        let batch_permits = self.inner.try_send_at_most(limit, recycler)?;
         Ok(WritePermits {
             inner: batch_permits,
         })
@@ -133,22 +134,22 @@ impl<T: Sentinel> ChannelSender<T> for Sender<T> {
 }
 
 /// Permit for writing a single item to an MPSC channel.
-pub struct WritePermit<'a, T: Sentinel> {
-    inner: crate::guards::WritePermitImpl<'a, T, PublisherSequencer>,
+pub struct WritePermit<'a, T, S: SlotRecycler<T>> {
+    inner: crate::guards::WritePermitImpl<'a, T, S, PublisherSequencer>,
 }
 
 /// Permit for writing a batch of items to an MPSC channel.
-pub struct WritePermits<'a, T: Sentinel> {
-    inner: crate::guards::WritePermitsImpl<'a, T, PublisherSequencer>,
+pub struct WritePermits<'a, T, S: SlotRecycler<T>> {
+    inner: crate::guards::WritePermitsImpl<'a, T, S, PublisherSequencer>,
 }
 
-impl<T: Sentinel> ChanWritePermit<T> for WritePermit<'_, T> {
+impl<T, S: SlotRecycler<T>> ChanWritePermit<T> for WritePermit<'_, T, S> {
     fn write(self, item: T) {
         self.inner.write(item);
     }
 }
 
-impl<'a, T: Sentinel> ChanWritePermits<T> for WritePermits<'a, T> {
+impl<'a, T, S: SlotRecycler<T>> ChanWritePermits<T> for WritePermits<'a, T, S> {
     fn total_reserved(&self) -> usize {
         self.inner.total_reserved()
     }

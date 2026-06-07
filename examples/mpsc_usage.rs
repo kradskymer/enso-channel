@@ -1,4 +1,7 @@
-use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
+use enso_channel::{
+    slot_recycler::ResetWithDefault, ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits,
+    ChannelSender,
+};
 
 fn main() {
     let (mut tx, mut rx) = enso_channel::mpsc::channel(16).unwrap();
@@ -7,7 +10,7 @@ fn main() {
     tx.try_send(1).unwrap();
     tx_cp.try_send(2).unwrap();
 
-    let mut batch_permits = tx.try_send_at_most(10).unwrap();
+    let mut batch_permits = tx.try_send_at_most(10, ResetWithDefault).unwrap();
     for i in 3..12 {
         if let Some(permit) = batch_permits.next() {
             permit.write(i);

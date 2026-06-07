@@ -1,6 +1,7 @@
 #[macro_use]
 mod harness;
 
+use enso_channel::slot_recycler::ResetWithDefault;
 use enso_channel::{ChanReadRefs, ChanReceiver, ChanWritePermit, ChanWritePermits, ChannelSender};
 use harness::broadcast as h;
 use harness::shared::{Channel, RecvBatchU32, SendBatchU32};
@@ -43,7 +44,7 @@ impl Channel for BroadcastContractChan {
         Self::Receiver: 'a;
 
     type SendBatch<'a>
-        = enso_channel::fanout::WritePermits<'a, 2, u32>
+        = enso_channel::fanout::WritePermits<'a, 2, u32, ResetWithDefault>
     where
         Self::Sender: 'a;
 
@@ -70,7 +71,7 @@ impl Channel for BroadcastContractChan {
         sender: &mut Self::Sender,
         items: &[u32],
     ) -> Result<usize, enso_channel::errors::TrySendAtMostError> {
-        let mut batch = sender.try_send_at_most(items.len())?;
+        let mut batch = sender.try_send_at_most(items.len(), ResetWithDefault)?;
         let n = batch.capacity();
         let mut i = 0;
         while let Some(permit) = batch.next() {
@@ -95,7 +96,7 @@ impl Channel for BroadcastContractChan {
         sender: &'a mut Self::Sender,
         n: usize,
     ) -> Result<Self::SendBatch<'a>, enso_channel::errors::TrySendAtMostError> {
-        sender.try_send_at_most(n)
+        sender.try_send_at_most(n, ResetWithDefault)
     }
 }
 
@@ -109,7 +110,7 @@ impl<'a> RecvBatchU32 for enso_channel::fanout::ReadRefs<'a, u32> {
     }
 }
 
-impl<'a> SendBatchU32 for enso_channel::fanout::WritePermits<'a, 2, u32> {
+impl<'a> SendBatchU32 for enso_channel::fanout::WritePermits<'a, 2, u32, ResetWithDefault> {
     fn capacity(&self) -> usize {
         ChanWritePermits::total_reserved(self)
     }

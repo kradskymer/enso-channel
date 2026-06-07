@@ -4,23 +4,24 @@
 
 use std::sync::Arc;
 
-use crate::{sequencers::Sequencer, RingBuffer, Sentinel, Sequence};
+use crate::{sequencers::Sequencer, RingBuffer, Sequence, SlotRecycler};
 
-pub(crate) struct WritePermitImpl<'a, T, P>
+pub(crate) struct WritePermitImpl<'a, T, S, P>
 where
     P: Sequencer,
-    T: Sentinel,
+    S: SlotRecycler<T>,
 {
     pub sequence: Sequence,
     pub publisher_sequencer: &'a P,
     pub ring_buffer: &'a Arc<RingBuffer<T>>,
+    pub recycler: S,
     pub wrote: bool,
 }
 
-impl<T, P> ChanWritePermit<T> for WritePermitImpl<'_, T, P>
+impl<T, S, P> ChanWritePermit<T> for WritePermitImpl<'_, T, S, P>
 where
     P: Sequencer,
-    T: Sentinel,
+    S: SlotRecycler<T>,
 {
     fn write(mut self, item: T) {
         self.ring_buffer.modify_at(self.sequence, |slot| {
@@ -30,15 +31,15 @@ where
     }
 }
 
-impl<T, P> Drop for WritePermitImpl<'_, T, P>
+impl<T, S, P> Drop for WritePermitImpl<'_, T, S, P>
 where
     P: Sequencer,
-    T: Sentinel,
+    S: SlotRecycler<T>,
 {
     fn drop(&mut self) {
         if !self.wrote {
             self.ring_buffer.modify_at(self.sequence, |slot| {
-                *slot = T::sentinel();
+                self.recycler.recycle(slot);
             });
         }
         self.publisher_sequencer.commit(self.sequence);
@@ -49,20 +50,20 @@ where
 // Multiple contiguous batch permits
 // ---------------------------------------------------------------------------
 
-pub(crate) struct BatchWritePermitImpl<'batch, 'a, T, P>
+pub(crate) struct BatchWritePermitImpl<'batch, 'a, T, S, P>
 where
     P: Sequencer,
-    T: Sentinel,
+    S: SlotRecycler<T>,
 {
     sequence: Sequence,
-    batch: &'batch mut WritePermitsImpl<'a, T, P>,
+    batch: &'batch mut WritePermitsImpl<'a, T, S, P>,
     wrote: bool,
 }
 
-impl<T, P> ChanWritePermit<T> for BatchWritePermitImpl<'_, '_, T, P>
+impl<T, S, P> ChanWritePermit<T> for BatchWritePermitImpl<'_, '_, T, S, P>
 where
     P: Sequencer,
-    T: Sentinel,
+    S: SlotRecycler<T>,
 {
     fn write(mut self, item: T) {
         self.batch.write(self.sequence, item);
@@ -70,36 +71,37 @@ where
     }
 }
 
-impl<T, P> Drop for BatchWritePermitImpl<'_, '_, T, P>
+impl<T, S, P> Drop for BatchWritePermitImpl<'_, '_, T, S, P>
 where
     P: Sequencer,
-    T: Sentinel,
+    S: SlotRecycler<T>,
 {
     fn drop(&mut self) {
         if !self.wrote {
-            self.batch.write(self.sequence, T::sentinel());
+            self.batch.recycle(self.sequence);
         }
     }
 }
 
-pub(crate) struct WritePermitsImpl<'a, T, P>
+pub(crate) struct WritePermitsImpl<'a, T, S, P>
 where
     P: Sequencer,
-    T: Sentinel,
+    S: SlotRecycler<T>,
 {
     pub ring_buffer: &'a RingBuffer<T>,
     pub publisher_sequencer: &'a mut P,
     pub start_seq: i64,
     pub end_seq: i64,
     pub next_seq: i64,
+    pub recycler: S,
 }
 
-impl<'a, T, P> WritePermitsImpl<'a, T, P>
+impl<'a, T, S, P> WritePermitsImpl<'a, T, S, P>
 where
     P: Sequencer,
-    T: Sentinel,
+    S: SlotRecycler<T>,
 {
-    fn next(&mut self) -> Option<BatchWritePermitImpl<'_, 'a, T, P>> {
+    fn next(&mut self) -> Option<BatchWritePermitImpl<'_, 'a, T, S, P>> {
         if self.next_seq > self.end_seq {
             return None;
         }
@@ -116,16 +118,21 @@ where
     fn write(&self, seq: Sequence, value: T) {
         self.ring_buffer.modify_at(seq, |slot| *slot = value);
     }
+
+    fn recycle(&self, seq: Sequence) {
+        self.ring_buffer
+            .modify_at(seq, |slot| self.recycler.recycle(slot));
+    }
 }
 
-impl<'a, T, P> Drop for WritePermitsImpl<'a, T, P>
+impl<'a, T, S, P> Drop for WritePermitsImpl<'a, T, S, P>
 where
-    T: Sentinel,
     P: Sequencer,
+    S: SlotRecycler<T>,
 {
     fn drop(&mut self) {
         while self.next_seq <= self.end_seq {
-            self.write(Sequence::new(self.next_seq), T::sentinel());
+            self.recycle(Sequence::new(self.next_seq));
             self.next_seq += 1;
         }
         self.publisher_sequencer
@@ -133,10 +140,10 @@ where
     }
 }
 
-impl<'a, T, P> ChanWritePermits<T> for WritePermitsImpl<'a, T, P>
+impl<'a, T, S, P> ChanWritePermits<T> for WritePermitsImpl<'a, T, S, P>
 where
-    T: Sentinel,
     P: Sequencer,
+    S: SlotRecycler<T>,
 {
     fn total_reserved(&self) -> usize {
         (self.end_seq - self.start_seq + 1) as usize
