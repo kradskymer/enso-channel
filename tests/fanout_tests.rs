@@ -1,6 +1,8 @@
 use enso_channel::{
-    errors::TrySendError, fanout, slot_recycler::ResetWithDefault, ChanReadRefs, ChanReceiver,
-    ChanSender, ChanWritePermit, ChanWritePermits,
+    errors::TrySendError,
+    fanout,
+    slot_recycler::{ResetWith, ResetWithDefault},
+    ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermit, ChanWritePermits,
 };
 use rstest::{fixture, rstest};
 
@@ -53,4 +55,34 @@ fn test_producer_block_by_slowest_receiver(
 
     tx.try_send(DEFAULT_CHANNEL_SIZE)
         .expect("should send success");
+}
+
+#[rstest]
+fn test_partial_receivers_disconnect_will_not_block_others(
+    #[from(channel)] (mut tx, mut rxs): (fanout::Sender<3, usize>, Vec<fanout::Receiver<usize>>),
+) {
+    let rx1 = rxs.remove(0);
+    drop(rx1);
+
+    let recycler = ResetWith(|| 181441671603);
+    let mut permits = tx.try_send_at_most(DEFAULT_CHANNEL_SIZE, recycler).unwrap();
+    for i in 0..DEFAULT_CHANNEL_SIZE {
+        if let Some(permit) = permits.next() {
+            permit.write(i);
+        }
+    }
+    permits.commit();
+
+    let mut rx = rxs.pop().unwrap();
+    {
+        let batch = rx.try_recv_at_most(DEFAULT_CHANNEL_SIZE).unwrap();
+        batch
+            .iter()
+            .zip(0..DEFAULT_CHANNEL_SIZE)
+            .for_each(|(item, expected)| assert_eq!(*item, expected));
+    }
+    drop(rxs);
+
+    let permits = tx.try_send_at_most(DEFAULT_CHANNEL_SIZE, recycler).unwrap();
+    assert_eq!(permits.total_reserved(), DEFAULT_CHANNEL_SIZE);
 }

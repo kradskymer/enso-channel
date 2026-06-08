@@ -155,8 +155,9 @@ impl SlotStateGroup for U32SlotStates {
             }
             last_available = seq_value;
         }
-        // Ensure readers observe slot writes for all sequences <= last_available.
-        if last_available >= start.value() {
+        // Ensure readers observe slot writes for all sequences <= last_available,
+        // and also observe a shutdown marker even when no data is available.
+        if last_available >= start.value() || shutdown {
             fence(Ordering::Acquire);
         }
         SlotState::new(Sequence::new(last_available), shutdown)

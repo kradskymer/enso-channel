@@ -8,6 +8,26 @@ use crate::{
     Cursor, Sequence,
 };
 
+/// The highest bit of the `claimed` cursor signals shutdown.
+/// When set, all future `try_claim` / `try_claim_at_most` calls return `Shutdown`.
+///
+/// Because `Sequence::INIT = -1` has all bits set (including bit 63),
+/// we cannot check the bit in isolation.  Instead, any negative claimed
+/// value other than `-1` signals shutdown.
+const SHUTDOWN_MASK: i64 = i64::MIN;
+/// Mask to clear the shutdown bit and recover the actual sequence value.
+const VALUE_MASK: i64 = i64::MAX;
+
+/// Returns `true` when `raw` indicates the publisher side is shut down.
+///
+/// The cursor stores `Sequence::INIT = -1` by default, which happens to
+/// have the sign bit set.  We therefore treat only *other* negative values
+/// (`< -1`) as the shutdown signal.
+#[inline]
+fn has_shutdown(raw: i64) -> bool {
+    raw < 0 && raw != -1
+}
+
 #[derive(Clone)]
 pub(crate) struct MultiPublisherSequencer<C: ConsumerBarrier> {
     shared_state: Arc<SharedState>,
@@ -41,7 +61,14 @@ impl SharedState {
         // We scan only within the ring window `[last_claimed - (capacity - 1), last_claimed]`.
         // A consumer cannot lag by more than `capacity - 1` sequences because publishers are
         // backpressured by the ring buffer.
-        let last_claimed = Sequence::new(self.claimed.load(Ordering::Acquire));
+        let raw = self.claimed.load(Ordering::Acquire);
+        // Strip the shutdown bit only when it is actually set;
+        // otherwise the raw value may be `Sequence::INIT = -1`.
+        let last_claimed = if has_shutdown(raw) {
+            Sequence::new(raw & VALUE_MASK)
+        } else {
+            Sequence::new(raw)
+        };
 
         let last_published = if last_claimed < Sequence::new(0) {
             // No items were ever claimed.
@@ -91,8 +118,12 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
     fn try_claim_at_most(&mut self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError> {
         let n = limit.min(self.ring_meta.buffer_size());
 
-        let mut last_claimed = Sequence::new(self.shared_state.claimed.load(Ordering::Relaxed));
+        let raw = self.shared_state.claimed.load(Ordering::Relaxed);
+        let mut last_claimed = Sequence::new(raw);
         loop {
+            if has_shutdown(last_claimed.value()) {
+                return Err(TryClaimError::Shutdown);
+            }
             let start_seq = last_claimed + 1;
 
             let consumed = self.consumer_gate.max_consumed();
@@ -139,6 +170,21 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
         self.shared_state
             .slot_states
             .publish_range(start_seq, end_seq);
+    }
+
+    #[inline]
+    fn terminate(&self) {
+        let raw = self.shared_state.claimed.load(Ordering::Acquire);
+        if has_shutdown(raw) {
+            return;
+        }
+        // Mark shutdown in slot states FIRST so consumers observe it
+        // before (or concurrently with) other senders seeing the claimed bit.
+        self.shared_state.close();
+        // Then block other senders.
+        self.shared_state
+            .claimed
+            .store(raw | SHUTDOWN_MASK, Ordering::Release);
     }
 }
 

@@ -60,6 +60,17 @@ pub(crate) trait Sequencer {
 
     /// Marks the range of sequences from `start_seq` to `end_seq` (inclusive) as committed.
     fn commit_range(&self, start_seq: Sequence, end_seq: Sequence);
+
+    /// Immediately terminates the sequencer, signalling shutdown to all peers.
+    ///
+    /// This is used when a sender panics during slot recycling (e.g. in the
+    /// [`SlotRecycler`](crate::SlotRecycler) callback). After `terminate()` returns:
+    /// - all future `try_claim` / `try_claim_at_most` calls will return
+    ///   [`TryClaimError::Shutdown`],
+    /// - consumers will observe [`TryRecvError::Disconnected`](crate::errors::TryRecvError::Disconnected).
+    fn terminate(&self) {
+        unimplemented!("By default consumer should not use this explicitly")
+    }
 }
 
 /// A barrier that prevents consumers from reading unpublished.

@@ -2,7 +2,7 @@
 // Single-slot Permit (from try_reserve)
 // ---------------------------------------------------------------------------
 
-use std::sync::Arc;
+use std::{panic::AssertUnwindSafe, sync::Arc};
 
 use crate::{sequencers::Sequencer, RingBuffer, Sequence, SlotRecycler};
 
@@ -44,10 +44,17 @@ where
     S: SlotRecycler<T>,
 {
     fn drop(&mut self) {
-        if !self.wrote {
-            self.ring_buffer.modify_at(self.sequence, |slot| {
-                self.recycler.recycle(slot);
-            });
+        if !self.wrote
+            && std::panic::catch_unwind(AssertUnwindSafe(|| {
+                self.ring_buffer.modify_at(self.sequence, |slot| {
+                    self.recycler.recycle(slot);
+                });
+            }))
+            .is_err()
+        {
+            // The recycler panicked — terminate the channel.
+            self.publisher_sequencer.terminate();
+            return;
         }
         self.publisher_sequencer.commit(self.sequence);
     }
@@ -102,8 +109,11 @@ where
     S: SlotRecycler<T>,
 {
     fn drop(&mut self) {
-        if !self.wrote {
-            self.batch.recycle(self.sequence);
+        if !self.wrote
+            && std::panic::catch_unwind(AssertUnwindSafe(|| self.batch.recycle(self.sequence)))
+                .is_err()
+        {
+            self.batch.publisher_sequencer.terminate();
         }
     }
 }
@@ -164,7 +174,17 @@ where
             return;
         }
         while self.next_seq <= self.end_seq {
-            self.recycle(Sequence::new(self.next_seq));
+            let seq = Sequence::new(self.next_seq);
+            let ring = self.ring_buffer;
+            let recycler_ref = &self.recycler;
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                ring.modify_at(seq, |slot| recycler_ref.recycle(slot));
+            }));
+            if result.is_err() {
+                // The recycler panicked — terminate the channel.
+                self.publisher_sequencer.terminate();
+                return;
+            }
             self.next_seq += 1;
         }
         self.publisher_sequencer
