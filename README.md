@@ -4,7 +4,7 @@
 
 <img src="https://raw.githubusercontent.com/kradskymer/enso-channel/refs/heads/main/enso_channel_logo.png" alt="enso-channel logo" height="300" width="300">
 
-### **Bounded. Lock-free. Batch-native.**
+### **Bounded. Lock-free. Batch-native. Async-aware.**
 
 *A batch-first concurrency primitive for bursty, latency-sensitive systems.*
 
@@ -20,151 +20,255 @@
 
 - [What is enso-channel?](#what-is-enso-channel)
 - [Design Philosophy](#design-philosophy)
-- [Non-Goals](#non-goals)
+- [Misuse prevention (compile-time)](#misuse-prevention-compile-time)
+- [Non-goals](#non-goals)
+- [Async model (receiver only)](#async-model-receiver-only)
 - [Communication Patterns](#communication-patterns)
 - [System-Wide Tunability](#system-wide-tunability)
 - [Getting Started](#getting-started)
-- [Disconnection (RAII)](#disconnection-raii)
+- [Lifecycle / shutdown (RAII)](#lifecycle--shutdown-raii)
 - [Performance Characteristics](#performance-characteristics)
 - [Benchmark Overview](#benchmark-overview)
 - [Correctness & Testing](#correctness--testing)
-- [When to Use enso-channel](#when-to-use-enso-channel)
 - [Roadmap](#roadmap)
 - [License](#license)
 
 ---
 
-## What is enso-channel?
+<!-- cargo-sync-rdme rustdoc [[ -->
+### What is enso-channel?
 
-`enso-channel` explores a **batch-first design space** for lock-free ring-buffer channels in Rust.
+`enso_channel` is a batch-first concurrency primitive: a family of bounded, lock-free,
+ring-buffer channels designed for bursty, latency-sensitive systems.
 
-### Built for systems where
+`enso-channel` explores a **batch-first design space** for lock-free ring-buffer channels
+in Rust.
 
-- Burst traffic is common
-- Tail latency (p99 / p99.9) matters
-- Backpressure must be explicit
-- Memory is bounded and pre-allocated
-- Scheduling is handled at a higher layer
+The API is intentionally non-blocking: operations are exposed as `try_*` and surface
+backpressure/termination explicitly via errors (`Full`, `Empty`, `Disconnected`).
 
-> **Note:** If you need async/await integration, blocking APIs, or dynamic resizing — this crate is probably not for you.
+#### Built for systems where
 
----
+* Burst traffic is common
+* Tail latency (p99 / p99.9) matters
+* Back pressure must be explicit
+* Memory is bounded and pre-allocated
+* Scheduling is handled at a higher layer
 
-## Design Philosophy
+ > 
+ > **Note:** If you need blocking APIs, dynamic resizing, or async senders — this crate is
+ > probably not for you. Receivers support async via an opt-in feature flag
+ > (`async-receiver`).
+
+### Design Philosophy
 
 `enso-channel` is a **concurrency primitive**, not a runtime.
 
-### Core Principles
+#### Core Principles
 
-- **Lock-free**
-- **Bounded capacity**
-- **Pre-allocated memory**
-- **Explicit backpressure**
-- **Native batch claim/commit**
-- **No hidden scheduling**
-- **No implicit blocking**
+* **Lock-free**
+* **Bounded capacity**
+* **Pre-allocated memory**
+* **Explicit back pressure**
+* **Native batch claim/commit**
+* **No hidden scheduling**
+* **No implicit blocking**
+* **Asymmetric async (receiver only, opt-in)**
 
-### Mental Model
+#### Mental Model
 
-Instead of sending items one-by-one:
+Instead of sending / receiving items one-by-one:
 
-```text
+````text
 1. Claim a contiguous range in the ring buffer
 2. Write into it / Read from it
 3. Commit the range
-```
+````
 
 **Batching amortizes synchronization cost and reduces tail latency under burst workloads.**
 
-#### Inspired by
+##### Inspired by
 
-- [LMAX Exchange's Disruptor](https://github.com/LMAX-Exchange/disruptor)
-- [crossbeam-channel](https://github.com/crossbeam-rs/crossbeam)
+* [LMAX Exchange’s Disruptor](https://github.com/LMAX-Exchange/disruptor)
+* [crossbeam-channel](https://github.com/crossbeam-rs/crossbeam)
 
-#### But with
+##### But with
 
-- Rust-native channel ergonomics
-- Unified API across topologies
-- Clear primitive boundaries
+* Rust-native channel ergonomics
+* Unified API across topologies
+* Clear primitive boundaries
 
----
+### Misuse prevention (compile-time)
 
-## Non-Goals
+Batch receives return a guard that commits consumption on drop. To keep this sound,
+the guard is intentionally *not* an `Iterator<Item = &T>`.
 
-> To prevent misuse and ambiguity:
+References yielded by `batch.iter()` are tied to the borrow of the batch guard and
+cannot outlive it:
 
-- No blocking API
-- No async integration
-- No dynamic resizing
-- No built-in scheduling policy
-- No priority queues
-- No fairness guarantees beyond lock-free progress
+````rust,compile_fail
+use enso_channel::mpsc;
+let (mut tx, mut rx) = mpsc::channel::<u64>(4);
+tx.try_send(1).unwrap();
 
-**Philosophy:** Scheduling, wake-up strategy, budgeting, priority, and flow control belong to higher layers.
+let r: &u64 = {
+    let batch = rx.try_recv_at_most(1).unwrap();
+    batch.iter().next().unwrap()
+};
+let _ = *r;
+````
 
-`enso-channel` intentionally surfaces `Full`, `Empty`, and `Disconnected` instead of hiding them behind blocking semantics.
+And you can’t commit (drop/`finish`) the guard while holding a reference from it:
 
----
+````rust,compile_fail
+use enso_channel::mpsc;
+let (mut tx, mut rx) = mpsc::channel::<u64>(4);
+tx.try_send(1).unwrap();
 
-## Communication Patterns
+let batch = rx.try_recv_at_most(1).unwrap();
+let first = batch.iter().next().unwrap();
+batch.finish();
+let _ = *first;
+````
+
+### Public API modules
+
+* [`mpsc`](https://docs.rs/enso-channel/0.1.1/enso_channel/mpsc/index.html): multi-producer, single-consumer
+* [`fanout`](https://docs.rs/enso-channel/0.1.1/enso_channel/fanout/index.html): lossless fixed-N fanout (each receiver sees every item)
+
+### Non-goals
+
+ > 
+ > To prevent misuse and ambiguity:
+
+* No blocking API
+* No dynamic resizing
+* No built-in scheduling policy
+* No priority queues
+* No fairness guarantees beyond lock-free progress
+* No **async senders** (see [Async model](#async-model-receiver-only))
+
+**Philosophy:** Scheduling, wake-up strategy, budgeting, priority, and flow control belong
+to higher layers.
+
+`enso-channel` intentionally surfaces `Full`, `Empty`, and `Disconnected` instead of hiding
+them behind blocking semantics.
+
+The **receiver** side offers optional async support (`recv_async`, `recv_at_most_async`)
+behind the `async-receiver` feature flag. The **sender** side remains purely non-blocking
+(`try_*` only).
+
+### Async model (receiver only)
+
+`enso-channel` takes an **asymmetric approach to async**: only the receiver side supports
+async/await.
+
+This design rests on two observations:
+
+1. **Senders are upstream-driven, receivers are sender-driven.**
+   In most systems, senders are paced by external input (IO, timers, other actors).
+   They don’t naturally “wait” — they push when data arrives.
+   Receivers, by contrast, often have nothing to do until senders produce, making
+   async a natural fit for the consumer side.
+
+1. **Cloneable senders make waker coordination expensive.**
+   Every sender type in `enso-channel` is `Clone`.
+   Adding wakers to the sender side would require synchronising across an arbitrary
+   number of cloned handles (mutex, atomic-set, or similar), introducing contention
+   at every send. That directly conflicts with the crate’s low-latency, lock-free
+   goals — especially when senders rarely need to block in practice.
+
+#### Enabling async
+
+````sh
+cargo add enso-channel --features async-receiver
+````
+
+````rust,ignore
+use enso_channel::mpsc;
+use enso_channel::prelude::*;
+
+async fn example(mut rx: mpsc::Receiver<u64>) {
+    // Wait for a single item
+    let guard = rx.recv_async().await.unwrap();
+    println!("{}", *guard);
+
+    // Wait for a batch of up to 8 items
+    let batch = rx.recv_at_most_async(8).await.unwrap();
+    for item in batch.iter() {
+        println!("{}", item);
+    }
+}
+````
+
+#### How it works
+
+* Producers notify receivers each time they commit published data (via
+  `commit` / `commit_range`).
+* The receiver registers its waker with a lock-free `AtomicWaker`, and the next commit
+  wakes it.
+* Shutdown (drop of the last sender) also triggers a wake, causing `recv_async` to
+  return `None`.
+
+This keeps the sender fast-path entirely free of waker overhead — no lists to scan, no
+locks to acquire. The only added cost on the producer side is a single
+`AtomicWaker::wake()` call per commit when the `async-receiver` feature is active (zero
+cost when disabled).
+
+### Communication Patterns
 
 Unified API across multiple topologies:
 
-| Pattern       | Description                         |
-| ------------- | ----------------------------------- |
-| **MPSC**      | Multiple Producer, Single Consumer    |
-| **Fan-out**   | Lossless Broadcast (fixed‑N fanout) |
+|Pattern|Description|
+|-------|-----------|
+|**MPSC**|Multiple Producer, Single Consumer|
+|**Fan-out**|Lossless Broadcast (fixed‑N fanout)|
 
-### Key Properties
+#### Key Properties
 
-- Receivers may initiate disconnect
-- Broadcast topology is fixed at creation
-- Disconnection follows RAII semantics
-- All patterns support batch operations
+* Receivers may initiate disconnect
+* Broadcast topology is fixed at creation
+* Disconnection follows RAII semantics
+* All patterns support batch operations
 
----
-
-## System-Wide Tunability
+### System-Wide Tunability
 
 Tunability in `enso-channel` is not limited to a specific topology.
 
 It emerges from its **batch-native design**.
 
-### Every pattern supports
+#### Every pattern supports
 
-| API                                     | Description              |
-| --------------------------------------- | ------------------------ |
-| `try_send_at_most` / `try_recv_at_most` | At-most semantics        |
-| Explicit backpressure                   | Surface `Full` / `Empty` |
+|API|Description|
+|---|-----------|
+|`try_send_at_most` / `try_recv_at_most`|At-most semantics|
+|Explicit backpressure|Surface `Full` / `Empty`|
 
-### This enables systematic control over
+#### This enables systematic control over
 
-- **Contention levels**
-- **Cache locality**
-- **Burst amortization**
-- **Producer/consumer balance**
-- **Tail latency behavior**
+* **Contention levels**
+* **Cache locality**
+* **Burst amortization**
+* **Producer/consumer balance**
+* **Tail latency behavior**
 
----
+### Getting Started
 
-## Getting Started
+#### Installation
 
-### Installation
-
-Add to your project:
-
-```sh
+````sh
 cargo add enso-channel
-```
+````
 
-### Example (MPSC)
+#### Example (MPSC)
 
-```rust
+````rust
 use enso_channel::mpsc;
+use enso_channel::prelude::*;
 use enso_channel::slot_recycler::ResetWithDefault;
 
 fn main() {
-    let (mut tx, mut rx) = mpsc::channel::<u64>(64);
+    let (mut tx, mut rx) = mpsc::channel::<u64>(64).unwrap();
 
     // Single send/recv
     tx.try_send(42).unwrap();
@@ -186,42 +290,73 @@ fn main() {
         println!("{v}");
     }
 }
-```
+````
 
 **All topologies share a consistent API shape.**
 
 See [documentation](https://docs.rs/enso-channel) for additional examples.
 
----
+### Lifecycle / shutdown (RAII)
 
-## Disconnection (RAII)
+This crate intentionally does **not** expose an explicit `close()`/`terminate()` API.
+Shutdown is expressed through normal Rust endpoint lifecycle:
 
-`enso-channel` does **not** expose an explicit `close()` API.
+* dropping the last sender initiates shutdown; receivers may drain already-committed items
+  and then observe `Disconnected`;
+* dropping the last receiver disconnects senders (subsequent sends return `Disconnected`).
 
-### Disconnection follows RAII
+#### Disconnection follows RAII
 
-- Dropping the last sender disconnects receivers (after draining committed items)
-- Dropping the last receiver disconnects senders
-- Batch guards commit automatically on drop
+* Dropping the last sender disconnects receivers (after draining committed items)
+* Dropping the last receiver disconnects senders
+* Batch guards commit automatically on drop
 
-### Important Caveat
+#### Important caveat
 
-> **Disconnection is eventual, not transactional.**
+ > 
+ > **Disconnection is eventual, not transactional.**
 
-A sender may still successfully publish if a receiver is dropped concurrently. 
+A sender may still successfully publish if a receiver is dropped concurrently.
 Already-committed items may never be observed by the application.
 
-For examples:
-1. A sender reserve a permit / batch permit, and the receiver(s) disconnect afterwards.
-2. A sender sends an item successfully, but the receiver(s) disconnect without consumption.
+For example:
 
-### Graceful shutdown without loss
+1. A sender reserves a permit / batch permit, and the receiver(s) disconnect afterwards.
+1. A sender sends an item successfully, but the receiver(s) disconnect without
+   consumption.
 
-```text
+#### Panic safety: poison shutdown
+
+The two-phase commit pattern (claim → write → commit) depends on
+[`SlotRecycler`](https://docs.rs/enso-channel/0.1.1/enso_channel/slot_recycler/trait.SlotRecycler.html) as the fallback for unwritten slots.
+**Your `SlotRecycler` must never panic** — it is the last defense for repairing
+stale claims.
+
+If a `SlotRecycler` does panic, the channel contract is broken (claimed slots can
+no longer be repaired). The crate responds by **shutting down the entire channel**
+to prevent undefined behaviour.
+
+Only **step 1 (claim)** checks for shutdown:
+
+|Step|Shutdown checked?|Rationale|
+|----|:---------------:|---------|
+|1. Claim slots|yes|natural gate; `Disconnected` returned here|
+|2. Write data|no|per-slot checks would hurt the hot path|
+|3. Commit|no|data already written; late check can’t help|
+
+In practice, this means a sender that committed data *after* another sender
+panicked (but before its own next claim) will see that data silently discarded.
+Published items committed *before* the panic remain drainable by receivers, up to
+the shutdown boundary.
+
+#### Graceful shutdown without loss
+
+````text
 1. Stop producing
 2. Drop all senders
 3. Drain on the receiver until `Disconnected`
-```
+````
+<!-- cargo-sync-rdme ]] -->
 
 ---
 
@@ -237,7 +372,7 @@ For examples:
 ### Not optimized for
 
 - Blocking workloads
-- Async runtimes
+- Async senders (receivers have opt-in async support)
 - Unbounded queues
 - General-purpose task scheduling
 
@@ -340,34 +475,15 @@ panic recovery, strict state reconciliation) on every operation.
 As a result, some behaviors are **caller contracts**:
 
 - **Send batch commit on drop.** `try_send_at_most*` use the slot recycler to fill
-- any unwritten slots when a send permit batch is finished or dropped.
-  Afterwards the written slots will be published and observed by receiver(s).
+any unwritten slots when a send permit batch is finished or dropped.
+Afterwards the written slots will be published and observed by receiver(s).
 - **Receive guards commit on drop.** Dropping a receive batch commits the full claimed range.
-    If you drop it without iterating, unread items are skipped (considered consumed).
+If you drop it without iterating, unread items are skipped (considered consumed).
 
-If you need stronger “panic containment” or recovery behavior, build it *on top* of this primitive
+If you need stronger "panic containment" or recovery behavior, build it *on top* of this primitive
 in your orchestration layer.
 
 > **Lock-free correctness and memory ordering are treated as first-class concerns.**
-
----
-
-## When to Use enso-channel
-
-### Use it if
-
-- You control your scheduling model
-- You prefer explicit backpressure
-- Your workload is burst-heavy
-- Tail latency matters
-- You want deterministic bounded behavior
-
-### Avoid it if
-
-- You need async/await integration
-- You want blocking `recv()`
-- You prefer runtime-managed scheduling
-- You require dynamic capacity growth
 
 ---
 
@@ -375,10 +491,8 @@ in your orchestration layer.
 
 - [ ] Loom verification
 - [ ] Additional workload benchmarks
-- [ ] More usage examples
+- [ ] More usage examples (async receiver)
 - [ ] Documentation expansion
-
-> **Note:** No plans for async or blocking APIs.
 
 ---
 
