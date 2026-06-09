@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::errors::{InvalidChannelSize, TryReserveError, TrySendAtMostError, TrySendError};
 use crate::receiver::{ReadRefImpl, ReadRefsImpl};
 use crate::sequencers::{
-    FanoutConSeqGate, FanoutConsumerSequencer, MultiPubSeqGate, MultiPublisherSequencer,
+    DefaultConsumerSequencer, FanoutConSeqGate, MultiPubSeqGate, MultiPublisherSequencer,
 };
 use crate::{
     ChanReadRef, ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermit, ChanWritePermits,
@@ -32,7 +32,7 @@ use crate::{
 };
 
 type PublisherSequencer<const N: usize> = MultiPublisherSequencer<FanoutConSeqGate<N>>;
-type ConsumerSequencer = FanoutConsumerSequencer<MultiPubSeqGate>;
+type ConsumerSequencer = DefaultConsumerSequencer<MultiPubSeqGate>;
 
 type Publisher<const N: usize, T> = crate::sender::SenderImpl<PublisherSequencer<N>, T>;
 type Consumer<T> = crate::receiver::ReceiverImpl<ConsumerSequencer, T>;
@@ -75,11 +75,9 @@ fn channel_with_ring<T, const N: usize>(
     ring_buffer: Arc<RingBuffer<T>>,
 ) -> (Sender<N, T>, [Receiver<T>; N]) {
     let ring_meta = ring_buffer.meta();
-    let consumed: [Arc<crate::Cursor>; N] =
-        std::array::from_fn(|_| Arc::new(crate::Cursor::new(crate::Sequence::INIT)));
-    let consumer_gate = Arc::new(FanoutConSeqGate::<N>::new(consumed.clone()));
+    let consumer_gate = Arc::new(FanoutConSeqGate::<N>::new());
 
-    let publisher_sequencer = PublisherSequencer::<N>::new(consumer_gate, ring_meta);
+    let publisher_sequencer = PublisherSequencer::<N>::new(consumer_gate.clone(), ring_meta);
     let publisher_gate = Arc::new(publisher_sequencer.publisher_gate());
 
     let sender = Sender::<N, T> {
@@ -87,8 +85,12 @@ fn channel_with_ring<T, const N: usize>(
     };
 
     let receivers: [Receiver<T>; N] = std::array::from_fn(|i| {
-        let consumer_sequencer =
-            ConsumerSequencer::new(publisher_gate.clone(), consumed[i].clone(), ring_meta);
+        let consumer_sequencer = ConsumerSequencer::new(
+            publisher_gate.clone(),
+            consumer_gate.consumed[i].clone(),
+            ring_meta,
+            consumer_gate.wakers[i].clone(),
+        );
         Receiver {
             inner: Consumer::new(consumer_sequencer, ring_buffer.clone()),
         }
@@ -235,6 +237,20 @@ impl<T> ChanReceiver<T> for Receiver<T> {
     ) -> Result<Self::ReadRefs<'_>, crate::errors::TryRecvError> {
         self.inner
             .try_recv_at_most(limit)
+            .map(|inner| ReadRefs { inner })
+    }
+
+    async fn recv_async(&mut self) -> Option<Self::ReadRef<'_>> {
+        self.inner.recv_async().await.map(|inner| ReadRef { inner })
+    }
+
+    async fn recv_at_most_async<'a>(&'a mut self, limit: usize) -> Option<Self::ReadRefs<'a>>
+    where
+        T: 'a,
+    {
+        self.inner
+            .recv_at_most_async(limit)
+            .await
             .map(|inner| ReadRefs { inner })
     }
 }

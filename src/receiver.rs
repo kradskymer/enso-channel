@@ -2,7 +2,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::errors::TryRecvError;
-use crate::sequencers::Sequencer;
+use crate::sequencers::{ConsumerSequencer, Sequencer};
 use crate::{ChanReadRef, ChanReadRefs, RingBuffer, Sequence};
 
 pub(crate) struct ReceiverImpl<C, T> {
@@ -21,7 +21,7 @@ impl<C, T> ReceiverImpl<C, T> {
 
 impl<C, T> ChanReceiver<T> for ReceiverImpl<C, T>
 where
-    C: Sequencer,
+    C: ConsumerSequencer,
 {
     type ReadRef<'this>
         = ReadRefImpl<'this, T, C>
@@ -46,12 +46,7 @@ where
 
     fn try_recv_at_most(&mut self, limit: usize) -> Result<ReadRefsImpl<'_, T, C>, TryRecvError> {
         if limit == 0 {
-            return Ok(ReadRefsImpl {
-                consumer_sequencer: &self.consumer_sequencer,
-                ring_buffer: &self.ring_buffer,
-                start_seq: Sequence::new(0),
-                end_seq: Sequence::INIT,
-            });
+            return Ok(empty_read_refs(&self.consumer_sequencer, &self.ring_buffer));
         }
         let (start_seq, end_seq) = self.consumer_sequencer.try_claim_at_most(limit as i64)?;
         Ok(ReadRefsImpl {
@@ -60,6 +55,58 @@ where
             start_seq,
             end_seq,
         })
+    }
+
+    async fn recv_async(&mut self) -> Option<Self::ReadRef<'_>> {
+        use std::future::poll_fn;
+        let poll = poll_fn(|cx| self.consumer_sequencer.claim_at_most_async(1, cx)).await;
+        match poll {
+            Ok((start_seq, end_seq)) => Some(ReadRefImpl {
+                consumer_sequencer: &self.consumer_sequencer,
+                seq: start_seq,
+                slot: self.ring_buffer.get_ref_at(end_seq),
+            }),
+            Err(_) => None,
+        }
+    }
+
+    async fn recv_at_most_async<'a>(&'a mut self, limit: usize) -> Option<Self::ReadRefs<'a>>
+    where
+        T: 'a,
+    {
+        if limit == 0 {
+            return Some(empty_read_refs(&self.consumer_sequencer, &self.ring_buffer));
+        }
+        use std::future::poll_fn;
+        let poll = poll_fn(|cx| {
+            self.consumer_sequencer
+                .claim_at_most_async(limit as i64, cx)
+        })
+        .await;
+        match poll {
+            Ok((start_seq, end_seq)) => Some(ReadRefsImpl {
+                consumer_sequencer: &self.consumer_sequencer,
+                ring_buffer: &self.ring_buffer,
+                start_seq,
+                end_seq,
+            }),
+            Err(_) => None,
+        }
+    }
+}
+
+fn empty_read_refs<'a, T, C>(
+    consumer_sequencer: &'a C,
+    ring_buffer: &'a RingBuffer<T>,
+) -> ReadRefsImpl<'a, T, C>
+where
+    C: Sequencer,
+{
+    ReadRefsImpl {
+        consumer_sequencer,
+        ring_buffer,
+        start_seq: Sequence::new(0),
+        end_seq: Sequence::INIT,
     }
 }
 
@@ -189,4 +236,23 @@ pub trait ChanReceiver<T> {
     /// If `limit` is `0`, this method will return an empty [`ChanReadRefs`] immediately without
     /// checking the channel's state.
     fn try_recv_at_most(&mut self, limit: usize) -> Result<Self::ReadRefs<'_>, TryRecvError>;
+
+    /// Receives a single value from the channel asynchronously.
+    ///
+    /// Returns a [`ChanReadRef`] if a value was available, or `None` if the channel is disconnected.
+    fn recv_async(&mut self) -> impl std::future::Future<Output = Option<Self::ReadRef<'_>>>;
+
+    /// Receives a batch of values from the channel asynchronously.
+    ///
+    /// Returns a [`ChanReadRefs`] if slots were claimed (the batch may contain fewer values than `limit`
+    /// slots if fewer are available), or `None` if the channel is disconnected.
+    ///
+    /// If `limit` is `0`, this method will return an empty [`ChanReadRefs`] immediately without
+    /// checking the channel's state.
+    fn recv_at_most_async<'a>(
+        &'a mut self,
+        limit: usize,
+    ) -> impl std::future::Future<Output = Option<Self::ReadRefs<'a>>>
+    where
+        T: 'a;
 }

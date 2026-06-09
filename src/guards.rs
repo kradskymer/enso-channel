@@ -4,11 +4,11 @@
 
 use std::{panic::AssertUnwindSafe, sync::Arc};
 
-use crate::{sequencers::Sequencer, RingBuffer, Sequence, SlotRecycler};
+use crate::{sequencers::ProducerSequencer, RingBuffer, Sequence, SlotRecycler};
 
 pub(crate) struct WritePermitImpl<'a, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     pub sequence: Sequence,
@@ -20,7 +20,7 @@ where
 
 impl<T, S, P> ChanWritePermit<T> for WritePermitImpl<'_, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     fn write(mut self, item: T) {
@@ -40,7 +40,7 @@ where
 
 impl<T, S, P> Drop for WritePermitImpl<'_, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     fn drop(&mut self) {
@@ -62,7 +62,7 @@ where
 
 impl<T, S, P> std::fmt::Debug for WritePermitImpl<'_, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -79,7 +79,7 @@ where
 
 pub(crate) struct BatchWritePermitImpl<'batch, 'a, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     sequence: Sequence,
@@ -89,7 +89,7 @@ where
 
 impl<T, S, P> ChanWritePermit<T> for BatchWritePermitImpl<'_, '_, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     fn write(mut self, item: T) {
@@ -105,7 +105,7 @@ where
 
 impl<T, S, P> Drop for BatchWritePermitImpl<'_, '_, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     fn drop(&mut self) {
@@ -120,7 +120,7 @@ where
 
 pub(crate) struct WritePermitsImpl<'a, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     pub ring_buffer: &'a RingBuffer<T>,
@@ -133,7 +133,7 @@ where
 
 impl<'a, T, S, P> WritePermitsImpl<'a, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     fn next(&mut self) -> Option<BatchWritePermitImpl<'_, 'a, T, S, P>> {
@@ -166,7 +166,7 @@ where
 
 impl<'a, T, S, P> Drop for WritePermitsImpl<'a, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     fn drop(&mut self) {
@@ -194,7 +194,7 @@ where
 
 impl<'a, T, S, P> std::fmt::Debug for WritePermitsImpl<'a, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -208,7 +208,7 @@ where
 
 impl<'a, T, S, P> ChanWritePermits<T> for WritePermitsImpl<'a, T, S, P>
 where
-    P: Sequencer,
+    P: ProducerSequencer,
     S: SlotRecycler<T>,
 {
     fn total_reserved(&self) -> usize {

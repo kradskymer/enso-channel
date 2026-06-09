@@ -102,6 +102,7 @@ mod sender;
 mod sequence;
 mod sequencers;
 mod slot_states;
+mod waker;
 
 mod guards;
 

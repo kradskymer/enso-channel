@@ -1,7 +1,9 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use super::super::RingBufferMeta;
-use crate::sequencers::{ConsumerBarrier, ProducerBarrier, Sequencer, SlotState};
+use crate::sequencers::{
+    ConsumerBarrier, ProducerBarrier, ProducerSequencer, Sequencer, SlotState,
+};
 use crate::{
     errors::TryClaimError,
     slot_states::{SlotStateGroup, U32SlotStates},
@@ -163,6 +165,7 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
     #[inline]
     fn commit(&self, seq: Sequence) {
         self.shared_state.slot_states.publish(seq);
+        self.consumer_gate.notify();
     }
 
     #[inline]
@@ -170,8 +173,11 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
         self.shared_state
             .slot_states
             .publish_range(start_seq, end_seq);
+        self.consumer_gate.notify();
     }
+}
 
+impl<C: ConsumerBarrier> ProducerSequencer for MultiPublisherSequencer<C> {
     #[inline]
     fn terminate(&self) {
         let raw = self.shared_state.claimed.load(Ordering::Acquire);
@@ -185,6 +191,7 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
         self.shared_state
             .claimed
             .store(raw | SHUTDOWN_MASK, Ordering::Release);
+        self.consumer_gate.notify();
     }
 }
 

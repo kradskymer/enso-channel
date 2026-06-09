@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::errors::{InvalidChannelSize, TryReserveError, TrySendAtMostError, TrySendError};
 use crate::receiver::{ReadRefImpl, ReadRefsImpl};
-use crate::sequencers::{ExclusiveConSeqGate, ExclusiveConsumerSequencer};
+use crate::sequencers::{DefaultConsumerSequencer, ExclusiveConSeqGate};
 use crate::sequencers::{MultiPubSeqGate, MultiPublisherSequencer};
 use crate::{
     ChanReadRef, ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermit, ChanWritePermits,
@@ -31,7 +31,7 @@ use crate::{
 };
 
 type PublisherSequencer = MultiPublisherSequencer<ExclusiveConSeqGate>;
-type ConsumerSequencer = ExclusiveConsumerSequencer<MultiPubSeqGate>;
+type ConsumerSequencer = DefaultConsumerSequencer<MultiPubSeqGate>;
 
 type Publisher<T> = crate::sender::SenderImpl<PublisherSequencer, T>;
 type Consumer<T> = crate::receiver::ReceiverImpl<ConsumerSequencer, T>;
@@ -69,15 +69,18 @@ where
 fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver<T>) {
     let capacity = ring_buffer.capacity() as usize;
 
-    // Shared consumed cursor used by the consumer gate and the consumer sequencer.
-    let consumed = Arc::new(crate::Cursor::new(crate::Sequence::INIT));
-    let consumer_gate = Arc::new(ExclusiveConSeqGate::new(consumed.clone()));
+    let consumer_gate = Arc::new(ExclusiveConSeqGate::new());
 
     let ring_meta = crate::RingBufferMeta::new(capacity);
-    let publisher_sequencer = PublisherSequencer::new(consumer_gate, ring_meta);
+    let publisher_sequencer = PublisherSequencer::new(consumer_gate.clone(), ring_meta);
     let publisher_gate = Arc::new(publisher_sequencer.publisher_gate());
 
-    let consumer_sequencer = ConsumerSequencer::new(consumed, publisher_gate, ring_meta);
+    let consumer_sequencer = ConsumerSequencer::new(
+        publisher_gate,
+        consumer_gate.consumed.clone(),
+        ring_meta,
+        consumer_gate.waker.clone(),
+    );
 
     let sender = Sender {
         inner: Publisher::new(publisher_sequencer, ring_buffer.clone()),
@@ -228,6 +231,20 @@ impl<T> ChanReceiver<T> for Receiver<T> {
     ) -> Result<Self::ReadRefs<'_>, crate::errors::TryRecvError> {
         self.inner
             .try_recv_at_most(limit)
+            .map(|inner| ReadRefs { inner })
+    }
+
+    async fn recv_async(&mut self) -> Option<Self::ReadRef<'_>> {
+        self.inner.recv_async().await.map(|inner| ReadRef { inner })
+    }
+
+    async fn recv_at_most_async<'a>(&'a mut self, limit: usize) -> Option<Self::ReadRefs<'a>>
+    where
+        T: 'a,
+    {
+        self.inner
+            .recv_at_most_async(limit)
+            .await
             .map(|inner| ReadRefs { inner })
     }
 }
