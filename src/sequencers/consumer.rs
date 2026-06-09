@@ -1,12 +1,8 @@
-use std::{
-    sync::{atomic::Ordering, Arc},
-    task::{Context, Poll},
-};
+use std::sync::{atomic::Ordering, Arc};
 
 use crate::{
     errors::TryClaimError,
     sequencers::{ConsumerSequencer, Sequencer},
-    waker::Waker,
     Cursor, ProducerBarrier, RingBufferMeta, Sequence,
 };
 
@@ -14,21 +10,32 @@ pub(crate) struct DefaultConsumerSequencer<P: ProducerBarrier> {
     consumed: Arc<Cursor>,
     producer_gate: Arc<P>,
     ring_meta: RingBufferMeta,
-    waker: Arc<Waker>,
+    #[cfg(feature = "async-receiver")]
+    waker: Arc<crate::waker::Waker>,
 }
 
 impl<P: ProducerBarrier> DefaultConsumerSequencer<P> {
+    #[cfg(feature = "async-receiver")]
     pub fn new(
         producer_gate: Arc<P>,
         consumed: Arc<Cursor>,
         ring_meta: RingBufferMeta,
-        waker: Arc<Waker>,
+        waker: Arc<crate::waker::Waker>,
     ) -> Self {
         Self {
             consumed,
             producer_gate,
             ring_meta,
             waker,
+        }
+    }
+
+    #[cfg(not(feature = "async-receiver"))]
+    pub fn new(producer_gate: Arc<P>, consumed: Arc<Cursor>, ring_meta: RingBufferMeta) -> Self {
+        Self {
+            consumed,
+            producer_gate,
+            ring_meta,
         }
     }
 }
@@ -81,11 +88,14 @@ impl<P: ProducerBarrier> Drop for DefaultConsumerSequencer<P> {
 }
 
 impl<P: ProducerBarrier> ConsumerSequencer for DefaultConsumerSequencer<P> {
+    #[cfg(feature = "async-receiver")]
     fn claim_at_most_async(
         &mut self,
         limit: i64,
-        ctx: &Context<'_>,
-    ) -> Poll<Result<(Sequence, Sequence), TryClaimError>> {
+        ctx: &std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(Sequence, Sequence), TryClaimError>> {
+        use std::task::Poll;
+
         match self.try_claim_at_most(limit) {
             Ok(result) => return Poll::Ready(Ok(result)),
             Err(TryClaimError::Shutdown) => {

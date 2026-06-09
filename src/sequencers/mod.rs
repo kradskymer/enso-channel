@@ -33,8 +33,6 @@ mod con_fanout;
 mod consumer;
 mod pub_mul;
 
-use std::task::{Context, Poll};
-
 pub(crate) use con_ex::ExclusiveConSeqGate;
 pub(crate) use con_fanout::FanoutConSeqGate;
 pub(crate) use consumer::DefaultConsumerSequencer;
@@ -79,11 +77,12 @@ pub(crate) trait ProducerSequencer: Sequencer {
 }
 
 pub(crate) trait ConsumerSequencer: Sequencer {
+    #[cfg(feature = "async-receiver")]
     fn claim_at_most_async(
         &mut self,
         limit: i64,
-        ctx: &Context<'_>,
-    ) -> Poll<Result<(Sequence, Sequence), TryClaimError>>;
+        ctx: &std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(Sequence, Sequence), TryClaimError>>;
 }
 
 /// A barrier that prevents consumers from reading unpublished.
@@ -97,7 +96,7 @@ pub(crate) trait ProducerBarrier {
 }
 
 /// Gate interface for publisher to coordinate with consumer sequences.
-pub(crate) trait ConsumerBarrier: ConsumerNotify {
+pub(crate) trait ConsumerBarrier {
     /// Returns the minimum consumed sequence across all consumers together
     /// with a shutdown flag.
     ///
@@ -105,15 +104,14 @@ pub(crate) trait ConsumerBarrier: ConsumerNotify {
     /// of all consumer positions).  `SlotState::is_shutdown()` is true when
     /// the consumer side has disconnected.
     fn max_consumed(&self) -> SlotState;
-}
 
-pub(crate) trait ConsumerNotify {
+    #[cfg(feature = "async-receiver")]
     fn notify(&self);
 }
 
 /// Combines a sequence value with a shutdown flag.
 ///
-/// Returned by [`SlotStateGroup::scan_available_until`] so callers receive both
+/// Returned by [`crate::slot_states::SlotStateGroup::scan_available_until`] so callers receive both
 /// the last contiguous available sequence and a shutdown signal in one call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SlotState {

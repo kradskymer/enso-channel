@@ -57,6 +57,7 @@ where
         })
     }
 
+    #[cfg(feature = "async-receiver")]
     async fn recv_async(&mut self) -> Option<Self::ReadRef<'_>> {
         use std::future::poll_fn;
         let poll = poll_fn(|cx| self.consumer_sequencer.claim_at_most_async(1, cx)).await;
@@ -70,6 +71,7 @@ where
         }
     }
 
+    #[cfg(feature = "async-receiver")]
     async fn recv_at_most_async<'a>(&'a mut self, limit: usize) -> Option<Self::ReadRefs<'a>>
     where
         T: 'a,
@@ -240,6 +242,7 @@ pub trait ChanReceiver<T> {
     /// Receives a single value from the channel asynchronously.
     ///
     /// Returns a [`ChanReadRef`] if a value was available, or `None` if the channel is disconnected.
+    #[cfg(feature = "async-receiver")]
     fn recv_async(&mut self) -> impl std::future::Future<Output = Option<Self::ReadRef<'_>>>;
 
     /// Receives a batch of values from the channel asynchronously.
@@ -249,6 +252,7 @@ pub trait ChanReceiver<T> {
     ///
     /// If `limit` is `0`, this method will return an empty [`ChanReadRefs`] immediately without
     /// checking the channel's state.
+    #[cfg(feature = "async-receiver")]
     fn recv_at_most_async<'a>(
         &'a mut self,
         limit: usize,

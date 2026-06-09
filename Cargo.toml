@@ -13,10 +13,13 @@ keywords = ["channel", "lock-free", "ring-buffer", "batch"]
 categories = ["concurrency", "data-structures"]
 rust-version = "1.75"
 
+[features]
+async-receiver = ["dep:atomic-waker"]
+
 [dependencies]
 thiserror = "2"
 crossbeam-utils = "0.8.21"
-atomic-waker = "1.1.2"
+atomic-waker = {version = "1.1.2", optional = true}
 
 [dev-dependencies]
 criterion = "0.8.2"

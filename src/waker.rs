@@ -1,3 +1,5 @@
+#![cfg(feature = "async-receiver")]
+
 use atomic_waker::AtomicWaker;
 use crossbeam_utils::CachePadded;
 

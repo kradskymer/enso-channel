@@ -84,18 +84,34 @@ fn channel_with_ring<T, const N: usize>(
         inner: Publisher::<N, T>::new(publisher_sequencer, ring_buffer.clone()),
     };
 
-    let receivers: [Receiver<T>; N] = std::array::from_fn(|i| {
-        let consumer_sequencer = ConsumerSequencer::new(
-            publisher_gate.clone(),
-            consumer_gate.consumed[i].clone(),
-            ring_meta,
-            consumer_gate.wakers[i].clone(),
-        );
-        Receiver {
-            inner: Consumer::new(consumer_sequencer, ring_buffer.clone()),
+    let receivers: [Receiver<T>; N] = cfg_select! {
+        feature = "async-receiver" => {
+            std::array::from_fn(|i| {
+                let consumer_sequencer = ConsumerSequencer::new(
+                    publisher_gate.clone(),
+                    consumer_gate.consumed[i].clone(),
+                    ring_meta,
+                    consumer_gate.wakers[i].clone(),
+                );
+                Receiver {
+                    inner: Consumer::new(consumer_sequencer, ring_buffer.clone()),
+                }
+            })
         }
-    });
+        _ => {
+            std::array::from_fn(|i| {
+                let consumer_sequencer = ConsumerSequencer::new(
+                    publisher_gate.clone(),
+                    consumer_gate.consumed[i].clone(),
+                    ring_meta,
+                );
+                Receiver {
+                    inner: Consumer::new(consumer_sequencer, ring_buffer.clone()),
+                }
+            })
 
+        }
+    };
     (sender, receivers)
 }
 
@@ -240,10 +256,12 @@ impl<T> ChanReceiver<T> for Receiver<T> {
             .map(|inner| ReadRefs { inner })
     }
 
+    #[cfg(feature = "async-receiver")]
     async fn recv_async(&mut self) -> Option<Self::ReadRef<'_>> {
         self.inner.recv_async().await.map(|inner| ReadRef { inner })
     }
 
+    #[cfg(feature = "async-receiver")]
     async fn recv_at_most_async<'a>(&'a mut self, limit: usize) -> Option<Self::ReadRefs<'a>>
     where
         T: 'a,

@@ -75,12 +75,23 @@ fn channel_with_ring<T>(ring_buffer: Arc<RingBuffer<T>>) -> (Sender<T>, Receiver
     let publisher_sequencer = PublisherSequencer::new(consumer_gate.clone(), ring_meta);
     let publisher_gate = Arc::new(publisher_sequencer.publisher_gate());
 
-    let consumer_sequencer = ConsumerSequencer::new(
-        publisher_gate,
-        consumer_gate.consumed.clone(),
-        ring_meta,
-        consumer_gate.waker.clone(),
-    );
+    let consumer_sequencer = cfg_select! {
+        feature = "async-receiver" => {
+            ConsumerSequencer::new(
+                publisher_gate,
+                consumer_gate.consumed.clone(),
+                ring_meta,
+                consumer_gate.waker.clone(),
+            )
+        },
+        _ => {
+            ConsumerSequencer::new(
+                publisher_gate,
+                consumer_gate.consumed.clone(),
+                ring_meta,
+            )
+        }
+    };
 
     let sender = Sender {
         inner: Publisher::new(publisher_sequencer, ring_buffer.clone()),
@@ -234,10 +245,12 @@ impl<T> ChanReceiver<T> for Receiver<T> {
             .map(|inner| ReadRefs { inner })
     }
 
+    #[cfg(feature = "async-receiver")]
     async fn recv_async(&mut self) -> Option<Self::ReadRef<'_>> {
         self.inner.recv_async().await.map(|inner| ReadRef { inner })
     }
 
+    #[cfg(feature = "async-receiver")]
     async fn recv_at_most_async<'a>(&'a mut self, limit: usize) -> Option<Self::ReadRefs<'a>>
     where
         T: 'a,

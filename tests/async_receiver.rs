@@ -1,3 +1,5 @@
+#![cfg(feature = "async-receiver")]
+
 use std::{thread::JoinHandle, time::Duration};
 
 use enso_channel::{fanout, mpsc, slot_recycler::ResetWithDefault, ChanReadRefs, ChanWritePermits};
@@ -96,13 +98,9 @@ fn test_receiver_recv_async<S: ChanSender<usize> + 'static + Send, R: ChanReceiv
     let mut rx = rxs.pop().unwrap();
     let poll = async {
         let mut i = 0;
-        loop {
-            if let Some(r) = rx.recv_async().await {
-                assert_eq!(*r, i);
-                i += 1;
-            } else {
-                break;
-            }
+        while let Some(r) = rx.recv_async().await {
+            assert_eq!(*r, i);
+            i += 1;
         }
     };
     let handle = spawn_sender(tx, method);
@@ -128,20 +126,15 @@ fn test_receiver_recv_at_most_async<
     let mut rx = rxs.pop().unwrap();
     let poll = async {
         let mut received = Vec::new();
-        loop {
-            match rx.recv_at_most_async(DEFAULT_CHANNEL_SIZE).await {
-                Some(refs) => {
-                    // recv_at_most_async may return a partial batch when the
-                    // sender is still publishing concurrently.
-                    let batch: Vec<_> = refs.iter().copied().collect();
-                    assert!(
-                        !batch.is_empty(),
-                        "recv_at_most_async should not return empty batches"
-                    );
-                    received.extend(batch);
-                }
-                None => break,
-            }
+        while let Some(refs) = rx.recv_at_most_async(DEFAULT_CHANNEL_SIZE).await {
+            // recv_at_most_async may return a partial batch when the
+            // sender is still publishing concurrently.
+            let batch: Vec<_> = refs.iter().copied().collect();
+            assert!(
+                !batch.is_empty(),
+                "recv_at_most_async should not return empty batches"
+            );
+            received.extend(batch);
         }
         received
     };
@@ -168,6 +161,7 @@ fn test_async_receiver_notified_on_sender_shutdown<
     let barrier_clone = barrier.clone();
     let handle = std::thread::spawn(move || {
         barrier_clone.wait();
+        std::thread::sleep(Duration::from_millis(200));
         drop(tx);
     });
     let mut rx = rxs.pop().unwrap();
