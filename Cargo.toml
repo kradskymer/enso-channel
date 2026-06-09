@@ -1,6 +1,6 @@
 [package]
 name = "enso-channel"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 authors = ["kradskymer<kradskymer@outlook.com>"]
 license = "MIT OR Apache-2.0"
@@ -41,6 +41,9 @@ harness = false
 [[bench]]
 name = "broadcast"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints.rust]
 unsafe_code = "warn"
