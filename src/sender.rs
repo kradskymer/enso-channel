@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::errors::{TryReserveError, TrySendAtMostError};
 use crate::guards::{WritePermitImpl, WritePermitsImpl};
+use crate::sequencers::ProducerSequencer;
 use crate::{errors::TrySendError, sequencers::Sequencer, RingBuffer, Sequence};
 use crate::{ChanWritePermit, ChanWritePermits, SlotRecycler};
 
@@ -27,7 +28,7 @@ impl<P: Sequencer, T> SenderImpl<P, T> {
     }
 }
 
-impl<P: Sequencer, T> ChanSender<T> for SenderImpl<P, T> {
+impl<P: ProducerSequencer, T> ChanSender<T> for SenderImpl<P, T> {
     type WritePermit<'this, S>
         = WritePermitImpl<'this, T, S, P>
     where

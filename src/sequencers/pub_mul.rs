@@ -1,7 +1,9 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use super::super::RingBufferMeta;
-use crate::sequencers::{ConsumerBarrier, ProducerBarrier, Sequencer, SlotState};
+use crate::sequencers::{
+    ConsumerBarrier, ProducerBarrier, ProducerSequencer, Sequencer, SlotState,
+};
 use crate::{
     errors::TryClaimError,
     slot_states::{SlotStateGroup, U32SlotStates},
@@ -30,29 +32,30 @@ fn has_shutdown(raw: i64) -> bool {
 
 #[derive(Clone)]
 pub(crate) struct MultiPublisherSequencer<C: ConsumerBarrier> {
-    shared_state: Arc<SharedState>,
+    shared_state: Arc<SharedState<C>>,
     max_available: Sequence,
-    consumer_gate: Arc<C>,
     ring_meta: RingBufferMeta,
 }
 
-struct SharedState {
+struct SharedState<C: ConsumerBarrier> {
     claimed: Arc<Cursor>,
     slot_states: Arc<U32SlotStates>,
+    consumer_gate: Arc<C>,
     buffer_size: i64,
 }
 
-impl SharedState {
-    fn new(ring_meta: RingBufferMeta) -> Self {
+impl<C: ConsumerBarrier> SharedState<C> {
+    fn new(ring_meta: RingBufferMeta, consumer_gate: Arc<C>) -> Self {
         Self {
             claimed: Arc::new(Cursor::default()),
             slot_states: Arc::new(U32SlotStates::new_all_empty(ring_meta)),
+            consumer_gate,
             buffer_size: ring_meta.buffer_size(),
         }
     }
 }
 
-impl SharedState {
+impl<C: ConsumerBarrier> SharedState<C> {
     #[inline]
     fn close(&self) {
         // Compute a shutdown boundary that is based on what is *actually published*
@@ -83,10 +86,17 @@ impl SharedState {
         // Mark the first unpublished slot as the shutdown boundary.
         // This makes the shutdown visible to consumers via the scan.
         self.slot_states.mark_shutdown(last_published + 1);
+
+        // Then block other senders.
+        self.claimed.store(raw | SHUTDOWN_MASK, Ordering::Release);
+        #[cfg(feature = "async-receiver")]
+        {
+            self.consumer_gate.notify();
+        }
     }
 }
 
-impl Drop for SharedState {
+impl<C: ConsumerBarrier> Drop for SharedState<C> {
     fn drop(&mut self) {
         self.close();
     }
@@ -95,9 +105,8 @@ impl Drop for SharedState {
 impl<C: ConsumerBarrier> MultiPublisherSequencer<C> {
     pub(crate) fn new(consumer_gate: Arc<C>, ring_meta: RingBufferMeta) -> Self {
         Self {
-            shared_state: Arc::new(SharedState::new(ring_meta)),
+            shared_state: Arc::new(SharedState::new(ring_meta, consumer_gate)),
             max_available: Sequence::INIT,
-            consumer_gate,
             ring_meta,
         }
     }
@@ -126,7 +135,7 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
             }
             let start_seq = last_claimed + 1;
 
-            let consumed = self.consumer_gate.max_consumed();
+            let consumed = self.shared_state.consumer_gate.max_consumed();
             if consumed.is_shutdown() {
                 return Err(TryClaimError::Shutdown);
             }
@@ -163,6 +172,10 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
     #[inline]
     fn commit(&self, seq: Sequence) {
         self.shared_state.slot_states.publish(seq);
+        #[cfg(feature = "async-receiver")]
+        {
+            self.shared_state.consumer_gate.notify();
+        }
     }
 
     #[inline]
@@ -170,21 +183,17 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
         self.shared_state
             .slot_states
             .publish_range(start_seq, end_seq);
+        #[cfg(feature = "async-receiver")]
+        {
+            self.shared_state.consumer_gate.notify();
+        }
     }
+}
 
+impl<C: ConsumerBarrier> ProducerSequencer for MultiPublisherSequencer<C> {
     #[inline]
     fn terminate(&self) {
-        let raw = self.shared_state.claimed.load(Ordering::Acquire);
-        if has_shutdown(raw) {
-            return;
-        }
-        // Mark shutdown in slot states FIRST so consumers observe it
-        // before (or concurrently with) other senders seeing the claimed bit.
         self.shared_state.close();
-        // Then block other senders.
-        self.shared_state
-            .claimed
-            .store(raw | SHUTDOWN_MASK, Ordering::Release);
     }
 }
 

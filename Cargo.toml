@@ -1,6 +1,6 @@
 [package]
 name = "enso-channel"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 authors = ["kradskymer<kradskymer@outlook.com>"]
 license = "MIT OR Apache-2.0"
@@ -13,9 +13,13 @@ keywords = ["channel", "lock-free", "ring-buffer", "batch"]
 categories = ["concurrency", "data-structures"]
 rust-version = "1.75"
 
+[features]
+async-receiver = ["dep:atomic-waker"]
+
 [dependencies]
 thiserror = "2"
 crossbeam-utils = "0.8.21"
+atomic-waker = {version = "1.1.2", optional = true}
 
 [dev-dependencies]
 criterion = "0.8.2"
@@ -24,6 +28,7 @@ crossbeam-channel = "0.5.15"
 core_affinity = "0.8"
 hdrhistogram = "7.5.4"
 rstest = "0.26.1"
+pollster = "0.4.0"
 
 [[bench]]
 name = "spsc"
@@ -36,6 +41,9 @@ harness = false
 [[bench]]
 name = "broadcast"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints.rust]
 unsafe_code = "warn"
