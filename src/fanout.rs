@@ -134,12 +134,12 @@ impl<const N: usize, T> ChanSender<T> for Sender<N, T> {
         Self: 'this,
         S: SlotRecycler<T>;
 
-    fn try_send(&mut self, value: T) -> Result<(), TrySendError<T>> {
+    fn try_send(&self, value: T) -> Result<(), TrySendError<T>> {
         self.inner.try_send(value)
     }
 
     fn try_reserve<S: SlotRecycler<T>>(
-        &mut self,
+        &self,
         recycler: S,
     ) -> Result<Self::WritePermit<'_, S>, TryReserveError> {
         let permit = self.inner.try_reserve(recycler)?;
@@ -147,7 +147,7 @@ impl<const N: usize, T> ChanSender<T> for Sender<N, T> {
     }
 
     fn try_send_at_most<S: SlotRecycler<T>>(
-        &mut self,
+        &self,
         limit: usize,
         recycler: S,
     ) -> Result<Self::WritePermits<'_, S>, TrySendAtMostError> {
@@ -243,12 +243,12 @@ impl<T> ChanReceiver<T> for Receiver<T> {
         Self: 'this,
         T: 'this;
 
-    fn try_recv(&mut self) -> Result<Self::ReadRef<'_>, crate::errors::TryRecvError> {
+    fn try_recv(&self) -> Result<Self::ReadRef<'_>, crate::errors::TryRecvError> {
         self.inner.try_recv().map(|inner| ReadRef { inner })
     }
 
     fn try_recv_at_most(
-        &mut self,
+        &self,
         limit: usize,
     ) -> Result<Self::ReadRefs<'_>, crate::errors::TryRecvError> {
         self.inner
@@ -257,12 +257,12 @@ impl<T> ChanReceiver<T> for Receiver<T> {
     }
 
     #[cfg(feature = "async-receiver")]
-    async fn recv_async(&mut self) -> Option<Self::ReadRef<'_>> {
+    async fn recv_async(&self) -> Option<Self::ReadRef<'_>> {
         self.inner.recv_async().await.map(|inner| ReadRef { inner })
     }
 
     #[cfg(feature = "async-receiver")]
-    async fn recv_at_most_async<'a>(&'a mut self, limit: usize) -> Option<Self::ReadRefs<'a>>
+    async fn recv_at_most_async<'a>(&'a self, limit: usize) -> Option<Self::ReadRefs<'a>>
     where
         T: 'a,
     {

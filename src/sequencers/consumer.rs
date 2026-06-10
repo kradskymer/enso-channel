@@ -41,11 +41,11 @@ impl<P: ProducerBarrier> DefaultConsumerSequencer<P> {
 }
 
 impl<P: ProducerBarrier> Sequencer for DefaultConsumerSequencer<P> {
-    fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
+    fn try_claim(&self) -> Result<Sequence, TryClaimError> {
         self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
     }
 
-    fn try_claim_at_most(&mut self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError> {
+    fn try_claim_at_most(&self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError> {
         let last_claimed = Sequence::new(self.consumed.load(Ordering::Acquire));
         let n = limit.min(self.ring_meta.buffer_size());
         let start_seq = last_claimed + 1;
@@ -90,7 +90,7 @@ impl<P: ProducerBarrier> Drop for DefaultConsumerSequencer<P> {
 impl<P: ProducerBarrier> ConsumerSequencer for DefaultConsumerSequencer<P> {
     #[cfg(feature = "async-receiver")]
     fn claim_at_most_async(
-        &mut self,
+        &self,
         limit: i64,
         ctx: &std::task::Context<'_>,
     ) -> std::task::Poll<Result<(Sequence, Sequence), TryClaimError>> {

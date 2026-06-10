@@ -4,7 +4,7 @@ use enso_channel::{
 };
 
 fn main() {
-    let (mut tx, [mut rx0, mut rx1]) = fanout::channel(16).unwrap();
+    let (tx, [rx0, rx1]) = fanout::channel(16).unwrap();
     // send a single value
     tx.try_send(42).unwrap();
 

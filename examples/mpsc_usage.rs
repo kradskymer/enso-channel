@@ -4,9 +4,9 @@ use enso_channel::{
 };
 
 fn main() {
-    let (mut tx, mut rx) = enso_channel::mpsc::channel(16).unwrap();
+    let (tx, rx) = enso_channel::mpsc::channel(16).unwrap();
 
-    let mut tx_cp = tx.clone();
+    let tx_cp = tx.clone();
     tx.try_send(1).unwrap();
     tx_cp.try_send(2).unwrap();
 

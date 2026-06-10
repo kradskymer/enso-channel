@@ -3,7 +3,7 @@ use enso_channel::{ChanReadRefs, ChanReceiver, ChanSender, ChanWritePermit, Chan
 fn main() {
     use enso_channel::mpsc;
 
-    let (mut tx, mut rx) = mpsc::channel::<u64>(64).unwrap();
+    let (tx, rx) = mpsc::channel::<u64>(64).unwrap();
 
     // Single send/recv
     tx.try_send(42).unwrap();
