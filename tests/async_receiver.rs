@@ -33,7 +33,7 @@ enum SendMethod {
 }
 
 fn spawn_sender<S: ChanSender<usize> + 'static + Send>(
-    mut tx: S,
+    tx: S,
     method: SendMethod,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || match method {
@@ -75,7 +75,7 @@ fn test_receiver_recv_at_most_async_with_zero_limit_return_immediately<
 >(
     #[case] (_tx, mut rxs): (S, Vec<R>),
 ) {
-    let mut rx = rxs.pop().unwrap();
+    let rx = rxs.pop().unwrap();
     let poll = async {
         let result = rx.recv_at_most_async(0).await;
         assert!(result.is_some());
@@ -95,7 +95,7 @@ fn test_receiver_recv_async<S: ChanSender<usize> + 'static + Send, R: ChanReceiv
     #[case] (tx, mut rxs): (S, Vec<R>),
     #[case] method: SendMethod,
 ) {
-    let mut rx = rxs.pop().unwrap();
+    let rx = rxs.pop().unwrap();
     let poll = async {
         let mut i = 0;
         while let Some(r) = rx.recv_async().await {
@@ -123,7 +123,7 @@ fn test_receiver_recv_at_most_async<
     #[case] (tx, mut rxs): (S, Vec<R>),
     #[case] method: SendMethod,
 ) {
-    let mut rx = rxs.pop().unwrap();
+    let rx = rxs.pop().unwrap();
     let poll = async {
         let mut received = Vec::new();
         while let Some(refs) = rx.recv_at_most_async(DEFAULT_CHANNEL_SIZE).await {
@@ -164,7 +164,7 @@ fn test_async_receiver_notified_on_sender_shutdown<
         std::thread::sleep(Duration::from_millis(200));
         drop(tx);
     });
-    let mut rx = rxs.pop().unwrap();
+    let rx = rxs.pop().unwrap();
     let poll = async {
         barrier.wait();
         while let Some(refs) = rx.recv_at_most_async(DEFAULT_CHANNEL_SIZE).await {

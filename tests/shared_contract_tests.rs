@@ -44,7 +44,7 @@ fn fanout_channel(
 #[case::mpsc(mpsc_channel(DEFAULT_CHANNEL_SIZE))]
 #[case::fanout(fanout_channel(DEFAULT_CHANNEL_SIZE))]
 fn test_back_pressure_applied<S: ChanSender<usize> + Clone, R: ChanReceiver<usize>>(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
     use enso_channel::{
         errors::{TryReserveError, TrySendAtMostError, TrySendError},
@@ -53,7 +53,7 @@ fn test_back_pressure_applied<S: ChanSender<usize> + Clone, R: ChanReceiver<usiz
 
     (0..DEFAULT_CHANNEL_SIZE)
         .zip(std::iter::repeat(tx.clone()))
-        .for_each(|(i, mut tx)| {
+        .for_each(|(i, tx)| {
             tx.try_send(i).unwrap();
         });
     assert_eq!(
@@ -95,7 +95,7 @@ fn test_empty_channel_recv<S: ChanSender<usize>, R: ChanReceiver<usize>>(
 #[case::mpsc(mpsc_channel(DEFAULT_CHANNEL_SIZE))]
 #[case::fanout(fanout_channel(DEFAULT_CHANNEL_SIZE))]
 fn test_ordering_should_be_fifo<S: ChanSender<usize>, R: ChanReceiver<usize>>(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
     for i in 0..DEFAULT_CHANNEL_SIZE {
         tx.try_send(i).unwrap();
@@ -114,7 +114,7 @@ fn test_slot_recycler_applied_on_write_permits_drop<
     S: ChanSender<usize>,
     R: ChanReceiver<usize>,
 >(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
     const MAGIC_NUMBER: usize = 933536831074;
     let permit = tx.try_reserve(|i: &mut _| *i = MAGIC_NUMBER).unwrap();
@@ -144,7 +144,7 @@ fn test_slot_recycler_applied_on_write_permits_drop<
 #[case::mpsc(mpsc_channel(DEFAULT_CHANNEL_SIZE))]
 #[case::fanout(fanout_channel(DEFAULT_CHANNEL_SIZE))]
 fn test_read_refs_block_sender_until_commit<S: ChanSender<usize>, R: ChanReceiver<usize>>(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
     const MAGIC_NUMBER: usize = 525770450318;
 
@@ -183,7 +183,7 @@ fn test_read_refs_block_sender_until_commit<S: ChanSender<usize>, R: ChanReceive
 #[case::mpsc(mpsc_channel(DEFAULT_CHANNEL_SIZE))]
 #[case::fanout(fanout_channel(DEFAULT_CHANNEL_SIZE))]
 fn test_uncommitted_permits_will_not_be_recv<S: ChanSender<usize>, R: ChanReceiver<usize>>(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
     let mut permits = tx
         .try_send_at_most(100, |i: &mut _| *i = usize::MAX)
@@ -211,7 +211,7 @@ fn test_drop_all_sender_disconnect_receivers<
     S: ChanSender<usize> + Clone,
     R: ChanReceiver<usize>,
 >(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
     let tx_clone = tx.clone();
     tx.try_send(1).unwrap();
@@ -241,7 +241,7 @@ fn test_drop_all_sender_disconnect_receivers<
 #[case::mpsc(mpsc_channel(DEFAULT_CHANNEL_SIZE))]
 #[case::fanout(fanout_channel(DEFAULT_CHANNEL_SIZE))]
 fn test_drop_all_receiver_disconnect_sender<S: ChanSender<usize>, R: ChanReceiver<usize>>(
-    #[case] (mut tx, rxs): (S, Vec<R>),
+    #[case] (tx, rxs): (S, Vec<R>),
 ) {
     use enso_channel::errors::{TryReserveError, TrySendAtMostError};
 
@@ -263,7 +263,7 @@ fn test_drop_all_receiver_disconnect_sender<S: ChanSender<usize>, R: ChanReceive
 #[case::mpsc(mpsc_channel(DEFAULT_CHANNEL_SIZE))]
 #[case::fanout(fanout_channel(DEFAULT_CHANNEL_SIZE))]
 fn test_try_send_at_most_is_bounded<S: ChanSender<usize>, R: ChanReceiver<usize>>(
-    #[case] (mut tx, _rxs): (S, Vec<R>),
+    #[case] (tx, _rxs): (S, Vec<R>),
 ) {
     let mut permits = tx.try_send_at_most(5, ResetWithDefault).unwrap();
     assert_eq!(permits.total_reserved(), 5);
@@ -287,7 +287,7 @@ fn test_try_send_at_most_is_bounded<S: ChanSender<usize>, R: ChanReceiver<usize>
 #[case::mpsc(mpsc_channel(DEFAULT_CHANNEL_SIZE))]
 #[case::fanout(fanout_channel(DEFAULT_CHANNEL_SIZE))]
 fn test_try_recv_at_most_is_bounded<S: ChanSender<usize>, R: ChanReceiver<usize>>(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
     let mut permits = tx.try_send_at_most(100, ResetWithDefault).unwrap();
     for i in 0..permits.total_reserved() {
@@ -314,7 +314,7 @@ fn test_try_send_at_most_with_zero_limit_return_empty_permit<
     S: ChanSender<usize>,
     R: ChanReceiver<usize>,
 >(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
     let mut permits = tx.try_send_at_most(0, ResetWithDefault).unwrap();
     assert_eq!(permits.total_reserved(), 0);
@@ -333,7 +333,7 @@ fn test_try_recv_at_most_with_zero_limit_return_empty_permit<
     S: ChanSender<usize>,
     R: ChanReceiver<usize>,
 >(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
     tx.try_send(1).unwrap();
     for rx in rxs.iter_mut() {
@@ -369,10 +369,10 @@ fn write_permit_panic_should_shutdown_channel<
     S: ChanSender<usize> + Clone + Send + 'static,
     R: ChanReceiver<usize>,
 >(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
     #[case] cause: PanicCause,
 ) {
-    let mut panic_tx = tx.clone();
+    let panic_tx = tx.clone();
     let panic_recycler = ResetWith(|| panic!());
     let handle = std::thread::spawn(move || match cause {
         PanicCause::WritePermit => {
@@ -410,12 +410,12 @@ fn write_permit_panic_allow_receiver_drain_already_published_before_shutdown<
     S: ChanSender<usize> + Clone + Send + 'static,
     R: ChanReceiver<usize>,
 >(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
     for i in 1..5 {
         tx.try_send(i).unwrap();
     }
-    let mut panic_tx = tx.clone();
+    let panic_tx = tx.clone();
     let panic_recycler = ResetWith(|| panic!());
     let handle = std::thread::spawn(move || {
         let mut permits = panic_tx
@@ -452,9 +452,9 @@ fn test_write_permit_panic_will_prevent_subsequent_sent_data_receiving<
     S: ChanSender<usize> + Clone + Send + 'static,
     R: ChanReceiver<usize>,
 >(
-    #[case] (mut tx, mut rxs): (S, Vec<R>),
+    #[case] (tx, mut rxs): (S, Vec<R>),
 ) {
-    let mut tx_panic = tx.clone();
+    let tx_panic = tx.clone();
     let panic_recycler = ResetWith(|| panic!());
     let panic_tx_claimed = std::sync::Arc::new(std::sync::Barrier::new(2));
     let panic_tx_claimed_clone = panic_tx_claimed.clone();

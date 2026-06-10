@@ -124,7 +124,7 @@ where
     S: SlotRecycler<T>,
 {
     pub ring_buffer: &'a RingBuffer<T>,
-    pub publisher_sequencer: &'a mut P,
+    pub publisher_sequencer: &'a P,
     pub start_seq: i64,
     pub end_seq: i64,
     pub next_seq: i64,

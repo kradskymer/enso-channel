@@ -3,7 +3,7 @@ use enso_channel::{
 };
 
 fn main() {
-    let (mut sender, receiver) = mpsc::channel::<u64>(16).unwrap();
+    let (sender, receiver) = mpsc::channel::<u64>(16).unwrap();
     let mut batch = sender.try_send_at_most(8, ResetWithDefault).unwrap();
     // Disconnect receiver while batch guard is still alive.
     drop(receiver);

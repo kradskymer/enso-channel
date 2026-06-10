@@ -34,7 +34,7 @@ where
         Self: 'this,
         T: 'this;
 
-    fn try_recv(&mut self) -> Result<ReadRefImpl<'_, T, C>, TryRecvError> {
+    fn try_recv(&self) -> Result<ReadRefImpl<'_, T, C>, TryRecvError> {
         let seq = self.consumer_sequencer.try_claim()?;
         let slot = self.ring_buffer.get_ref_at(seq);
         Ok(ReadRefImpl {
@@ -44,7 +44,7 @@ where
         })
     }
 
-    fn try_recv_at_most(&mut self, limit: usize) -> Result<ReadRefsImpl<'_, T, C>, TryRecvError> {
+    fn try_recv_at_most(&self, limit: usize) -> Result<ReadRefsImpl<'_, T, C>, TryRecvError> {
         if limit == 0 {
             return Ok(empty_read_refs(&self.consumer_sequencer, &self.ring_buffer));
         }
@@ -58,7 +58,7 @@ where
     }
 
     #[cfg(feature = "async-receiver")]
-    async fn recv_async(&mut self) -> Option<Self::ReadRef<'_>> {
+    async fn recv_async(&self) -> Option<Self::ReadRef<'_>> {
         use std::future::poll_fn;
         let poll = poll_fn(|cx| self.consumer_sequencer.claim_at_most_async(1, cx)).await;
         match poll {
@@ -72,7 +72,7 @@ where
     }
 
     #[cfg(feature = "async-receiver")]
-    async fn recv_at_most_async<'a>(&'a mut self, limit: usize) -> Option<Self::ReadRefs<'a>>
+    async fn recv_at_most_async<'a>(&'a self, limit: usize) -> Option<Self::ReadRefs<'a>>
     where
         T: 'a,
     {
@@ -228,7 +228,7 @@ pub trait ChanReceiver<T> {
     ///
     /// Returns a [`ChanReadRef`] if a value was available, or an error if the channel
     /// is empty or disconnected.
-    fn try_recv(&mut self) -> Result<Self::ReadRef<'_>, TryRecvError>;
+    fn try_recv(&self) -> Result<Self::ReadRef<'_>, TryRecvError>;
 
     /// Tries to receive a batch of values from the channel.
     ///
@@ -237,13 +237,13 @@ pub trait ChanReceiver<T> {
     ///
     /// If `limit` is `0`, this method will return an empty [`ChanReadRefs`] immediately without
     /// checking the channel's state.
-    fn try_recv_at_most(&mut self, limit: usize) -> Result<Self::ReadRefs<'_>, TryRecvError>;
+    fn try_recv_at_most(&self, limit: usize) -> Result<Self::ReadRefs<'_>, TryRecvError>;
 
     /// Receives a single value from the channel asynchronously.
     ///
     /// Returns a [`ChanReadRef`] if a value was available, or `None` if the channel is disconnected.
     #[cfg(feature = "async-receiver")]
-    fn recv_async(&mut self) -> impl std::future::Future<Output = Option<Self::ReadRef<'_>>>;
+    fn recv_async(&self) -> impl std::future::Future<Output = Option<Self::ReadRef<'_>>>;
 
     /// Receives a batch of values from the channel asynchronously.
     ///
@@ -254,7 +254,7 @@ pub trait ChanReceiver<T> {
     /// checking the channel's state.
     #[cfg(feature = "async-receiver")]
     fn recv_at_most_async<'a>(
-        &'a mut self,
+        &'a self,
         limit: usize,
     ) -> impl std::future::Future<Output = Option<Self::ReadRefs<'a>>>
     where

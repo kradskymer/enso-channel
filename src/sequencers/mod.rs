@@ -49,13 +49,13 @@ use crate::Sequence;
 #[doc(hidden)]
 pub(crate) trait Sequencer {
     /// Attempts to reserve the next sequence for publishing.
-    fn try_claim(&mut self) -> Result<Sequence, TryClaimError>;
+    fn try_claim(&self) -> Result<Sequence, TryClaimError>;
 
     /// Attempts to reserve up to `limit` sequences, claiming as many as available (1..=limit).
     /// Returns a tuple of (start_seq, end_seq) where count is the actual number of sequences claimed.
     /// If limit > buffer size, it will only attempt to claim up to buffer size.
     /// If no sequences are available, returns `TryClaimError::Empty`.
-    fn try_claim_at_most(&mut self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError>;
+    fn try_claim_at_most(&self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError>;
 
     /// Marks the sequence `seq` as committed.
     fn commit(&self, seq: Sequence);
@@ -79,7 +79,7 @@ pub(crate) trait ProducerSequencer: Sequencer {
 pub(crate) trait ConsumerSequencer: Sequencer {
     #[cfg(feature = "async-receiver")]
     fn claim_at_most_async(
-        &mut self,
+        &self,
         limit: i64,
         ctx: &std::task::Context<'_>,
     ) -> std::task::Poll<Result<(Sequence, Sequence), TryClaimError>>;

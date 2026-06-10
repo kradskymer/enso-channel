@@ -19,7 +19,7 @@ fn channel(
 
 #[rstest]
 fn test_producer_block_by_slowest_receiver(
-    #[from(channel)] (mut tx, mut rxs): (fanout::Sender<3, usize>, Vec<fanout::Receiver<usize>>),
+    #[from(channel)] (tx, mut rxs): (fanout::Sender<3, usize>, Vec<fanout::Receiver<usize>>),
 ) {
     let mut permits = tx
         .try_send_at_most(DEFAULT_CHANNEL_SIZE, ResetWithDefault)
@@ -59,7 +59,7 @@ fn test_producer_block_by_slowest_receiver(
 
 #[rstest]
 fn test_partial_receivers_disconnect_will_not_block_others(
-    #[from(channel)] (mut tx, mut rxs): (fanout::Sender<3, usize>, Vec<fanout::Receiver<usize>>),
+    #[from(channel)] (tx, mut rxs): (fanout::Sender<3, usize>, Vec<fanout::Receiver<usize>>),
 ) {
     let rx1 = rxs.remove(0);
     drop(rx1);
@@ -73,7 +73,7 @@ fn test_partial_receivers_disconnect_will_not_block_others(
     }
     permits.commit();
 
-    let mut rx = rxs.pop().unwrap();
+    let rx = rxs.pop().unwrap();
     {
         let batch = rx.try_recv_at_most(DEFAULT_CHANNEL_SIZE).unwrap();
         batch

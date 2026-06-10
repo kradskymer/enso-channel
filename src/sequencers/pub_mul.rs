@@ -33,7 +33,6 @@ fn has_shutdown(raw: i64) -> bool {
 #[derive(Clone)]
 pub(crate) struct MultiPublisherSequencer<C: ConsumerBarrier> {
     shared_state: Arc<SharedState<C>>,
-    max_available: Sequence,
     ring_meta: RingBufferMeta,
 }
 
@@ -106,7 +105,6 @@ impl<C: ConsumerBarrier> MultiPublisherSequencer<C> {
     pub(crate) fn new(consumer_gate: Arc<C>, ring_meta: RingBufferMeta) -> Self {
         Self {
             shared_state: Arc::new(SharedState::new(ring_meta, consumer_gate)),
-            max_available: Sequence::INIT,
             ring_meta,
         }
     }
@@ -120,11 +118,11 @@ impl<C: ConsumerBarrier> MultiPublisherSequencer<C> {
 }
 
 impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
-    fn try_claim(&mut self) -> Result<Sequence, TryClaimError> {
+    fn try_claim(&self) -> Result<Sequence, TryClaimError> {
         self.try_claim_at_most(1).map(|(_, end_seq)| end_seq)
     }
 
-    fn try_claim_at_most(&mut self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError> {
+    fn try_claim_at_most(&self, limit: i64) -> Result<(Sequence, Sequence), TryClaimError> {
         let n = limit.min(self.ring_meta.buffer_size());
 
         let raw = self.shared_state.claimed.load(Ordering::Relaxed);
@@ -142,14 +140,14 @@ impl<C: ConsumerBarrier> Sequencer for MultiPublisherSequencer<C> {
             let max_consumed = consumed.sequence();
 
             let available_capacity = self.ring_meta.available_slots(last_claimed, max_consumed);
-            self.max_available = last_claimed + available_capacity;
+            let max_available = last_claimed + available_capacity;
 
             // None available
-            if start_seq > self.max_available {
+            if start_seq > max_available {
                 return Err(TryClaimError::Empty);
             }
 
-            let available = (self.max_available.value() - last_claimed.value()).min(n);
+            let available = (max_available.value() - last_claimed.value()).min(n);
             let highest_to_publish = last_claimed + available;
 
             let expected = last_claimed.value();

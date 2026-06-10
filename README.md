@@ -108,7 +108,7 @@ cannot outlive it:
 
 ````rust,compile_fail
 use enso_channel::mpsc;
-let (mut tx, mut rx) = mpsc::channel::<u64>(4);
+let (tx, rx) = mpsc::channel::<u64>(4);
 tx.try_send(1).unwrap();
 
 let r: &u64 = {
@@ -122,7 +122,7 @@ And you can’t commit (drop/`finish`) the guard while holding a reference from 
 
 ````rust,compile_fail
 use enso_channel::mpsc;
-let (mut tx, mut rx) = mpsc::channel::<u64>(4);
+let (tx, rx) = mpsc::channel::<u64>(4);
 tx.try_send(1).unwrap();
 
 let batch = rx.try_recv_at_most(1).unwrap();
@@ -133,8 +133,8 @@ let _ = *first;
 
 ### Public API modules
 
-* [`mpsc`](https://docs.rs/enso-channel/0.1.1/enso_channel/mpsc/index.html): multi-producer, single-consumer
-* [`fanout`](https://docs.rs/enso-channel/0.1.1/enso_channel/fanout/index.html): lossless fixed-N fanout (each receiver sees every item)
+* [`mpsc`](https://docs.rs/enso-channel/0.2.0/enso_channel/mpsc/index.html): multi-producer, single-consumer
+* [`fanout`](https://docs.rs/enso-channel/0.2.0/enso_channel/fanout/index.html): lossless fixed-N fanout (each receiver sees every item)
 
 ### Non-goals
 
@@ -188,7 +188,7 @@ cargo add enso-channel --features async-receiver
 use enso_channel::mpsc;
 use enso_channel::prelude::*;
 
-async fn example(mut rx: mpsc::Receiver<u64>) {
+async fn example(rx: mpsc::Receiver<u64>) {
     // Wait for a single item
     let guard = rx.recv_async().await.unwrap();
     println!("{}", *guard);
@@ -268,7 +268,7 @@ use enso_channel::prelude::*;
 use enso_channel::slot_recycler::ResetWithDefault;
 
 fn main() {
-    let (mut tx, mut rx) = mpsc::channel::<u64>(64).unwrap();
+    let (tx, rx) = mpsc::channel::<u64>(64).unwrap();
 
     // Single send/recv
     tx.try_send(42).unwrap();
@@ -278,7 +278,7 @@ fn main() {
     }
 
     // Batch send
-    let mut batch = tx.try_send_at_most(8, ResetWithDefault).unwrap();
+    let batch = tx.try_send_at_most(8, ResetWithDefault).unwrap();
     for i in 1..=8 {
         batch.next().unwrap().write(i);
     }
@@ -328,7 +328,7 @@ For example:
 #### Panic safety: poison shutdown
 
 The two-phase commit pattern (claim → write → commit) depends on
-[`SlotRecycler`](https://docs.rs/enso-channel/0.1.1/enso_channel/slot_recycler/trait.SlotRecycler.html) as the fallback for unwritten slots.
+[`SlotRecycler`](https://docs.rs/enso-channel/0.2.0/enso_channel/slot_recycler/trait.SlotRecycler.html) as the fallback for unwritten slots.
 **Your `SlotRecycler` must never panic** — it is the last defense for repairing
 stale claims.
 

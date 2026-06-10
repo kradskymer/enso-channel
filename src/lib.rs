@@ -71,7 +71,7 @@
 //! ```compile_fail
 //! use enso_channel::mpsc;
 //! # use enso_channel::prelude::*;
-//! let (mut tx, mut rx) = mpsc::channel::<u64>(4);
+//! let (tx, rx) = mpsc::channel::<u64>(4);
 //! tx.try_send(1).unwrap();
 //!
 //! let r: &u64 = {
@@ -86,7 +86,7 @@
 //! ```compile_fail
 //! use enso_channel::mpsc;
 //! # use enso_channel::prelude::*;
-//! let (mut tx, mut rx) = mpsc::channel::<u64>(4);
+//! let (tx, rx) = mpsc::channel::<u64>(4);
 //! tx.try_send(1).unwrap();
 //!
 //! let batch = rx.try_recv_at_most(1).unwrap();
@@ -151,7 +151,7 @@
 //! use enso_channel::mpsc;
 //! use enso_channel::prelude::*;
 //!
-//! async fn example(mut rx: mpsc::Receiver<u64>) {
+//! async fn example(rx: mpsc::Receiver<u64>) {
 //!     // Wait for a single item
 //!     let guard = rx.recv_async().await.unwrap();
 //!     println!("{}", *guard);
@@ -231,7 +231,7 @@
 //! use enso_channel::slot_recycler::ResetWithDefault;
 //!
 //! fn main() {
-//!     let (mut tx, mut rx) = mpsc::channel::<u64>(64).unwrap();
+//!     let (tx, rx) = mpsc::channel::<u64>(64).unwrap();
 //!
 //!     // Single send/recv
 //!     tx.try_send(42).unwrap();

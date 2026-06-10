@@ -41,7 +41,7 @@ impl<P: ProducerSequencer, T> ChanSender<T> for SenderImpl<P, T> {
         Self: 'this,
         S: SlotRecycler<T>;
 
-    fn try_send(&mut self, value: T) -> Result<(), TrySendError<T>> {
+    fn try_send(&self, value: T) -> Result<(), TrySendError<T>> {
         match self.publisher_sequencer.try_claim() {
             Ok(seq) => {
                 self.write(value, seq);
@@ -54,7 +54,7 @@ impl<P: ProducerSequencer, T> ChanSender<T> for SenderImpl<P, T> {
     }
 
     fn try_reserve<S: SlotRecycler<T>>(
-        &mut self,
+        &self,
         recycler: S,
     ) -> Result<Self::WritePermit<'_, S>, TryReserveError> {
         let seq = self.publisher_sequencer.try_claim()?;
@@ -68,14 +68,14 @@ impl<P: ProducerSequencer, T> ChanSender<T> for SenderImpl<P, T> {
     }
 
     fn try_send_at_most<S: SlotRecycler<T>>(
-        &mut self,
+        &self,
         limit: usize,
         recycler: S,
     ) -> Result<Self::WritePermits<'_, S>, TrySendAtMostError> {
         if limit == 0 {
             return Ok(WritePermitsImpl {
                 ring_buffer: &self.ring_buffer,
-                publisher_sequencer: &mut self.publisher_sequencer,
+                publisher_sequencer: &self.publisher_sequencer,
                 start_seq: 0,
                 end_seq: -1,
                 next_seq: 0,
@@ -85,7 +85,7 @@ impl<P: ProducerSequencer, T> ChanSender<T> for SenderImpl<P, T> {
         let (start_seq, end_seq) = self.publisher_sequencer.try_claim_at_most(limit as i64)?;
         Ok(WritePermitsImpl {
             ring_buffer: &self.ring_buffer,
-            publisher_sequencer: &mut self.publisher_sequencer,
+            publisher_sequencer: &self.publisher_sequencer,
             start_seq: start_seq.value(),
             end_seq: end_seq.value(),
             next_seq: start_seq.value(),
@@ -112,14 +112,14 @@ pub trait ChanSender<T> {
     ///
     /// Returns `Ok(())` if the value was sent successfully
     /// or an error if the channel is full or disconnected.
-    fn try_send(&mut self, value: T) -> Result<(), TrySendError<T>>;
+    fn try_send(&self, value: T) -> Result<(), TrySendError<T>>;
 
     /// Tries to reserve a slot in the channel for a value of type `T`.
     ///
     /// Returns a write permit if the slot was reserved successfully without channel closed.
     /// or an error if the channel is full or disconnected.
     fn try_reserve<S: SlotRecycler<T>>(
-        &mut self,
+        &self,
         recycler: S,
     ) -> Result<Self::WritePermit<'_, S>, TryReserveError>;
 
@@ -132,7 +132,7 @@ pub trait ChanSender<T> {
     /// If `limit` is `0`, this method will return an empty [`ChanWritePermits`] immediately
     /// without checking the channel state.
     fn try_send_at_most<S: SlotRecycler<T>>(
-        &mut self,
+        &self,
         limit: usize,
         recycler: S,
     ) -> Result<Self::WritePermits<'_, S>, TrySendAtMostError>;
